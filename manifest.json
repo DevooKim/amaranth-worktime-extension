@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "gw-worktime",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "아마란스 그룹웨어에 들어가지 않고 이번 달 근무시간과 퇴근 가능 시각을 확인하고, 새 알림을 받습니다.",
   "permissions": [
     "cookies",
