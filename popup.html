@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <span id="state" class="state"><i class="dot"></i><span id="state-text">불러오는 중…</span></span>
+      <span id="date" class="date"></span>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="today">오늘</button>
+      <button class="tab" data-tab="records">기록</button>
+      <button class="tab" data-tab="alerts">알림<span id="alert-badge" class="tab-badge" hidden></span></button>
+    </nav>
+
+    <main>
+      <section id="panel-today" class="panel">
+        <div id="notice" class="notice" hidden>
+          <p id="notice-text"></p>
+          <button id="notice-action" class="btn" hidden>그룹웨어 열기</button>
+        </div>
+
+        <div id="today-body" hidden>
+          <button id="hero-toggle" class="hero-toggle" title="클릭하면 전환 (Alt+Shift+T)">
+            <span class="hero-label">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
+              <span id="hero-label">오늘 근무 시간</span>
+            </span>
+            <span id="hero" class="hero">--:--</span>
+          </button>
+          <p id="hero-sub" class="hero-sub"></p>
+
+          <div class="bar"><i id="bar-fill"></i></div>
+          <div class="bar-meta">
+            <span id="bar-left"></span>
+            <span id="bar-right"></span>
+          </div>
+
+          <dl class="rows">
+            <div class="row">
+              <dt>오늘 남은 시간 <span id="daily-label" class="hint">8시간 기준</span></dt>
+              <dd id="today-remaining">-</dd>
+            </div>
+            <div class="row"><dt>이번 달 초과·부족</dt><dd id="balance">-</dd></div>
+            <div class="row"><dt>이번 달 부족한 시간</dt><dd id="shortage">-</dd></div>
+            <div class="row"><dt>남은 근무일</dt><dd id="remaining">-</dd></div>
+          </dl>
+
+          <div id="leave-balance" class="leave-balance" hidden>
+            <span class="lb-num" id="lb-num">-</span>
+            <span class="lb-label">일 남은 연차</span>
+            <span class="lb-meta" id="lb-meta"></span>
+          </div>
+
+          <p class="note">오늘 근무 시간이 포함된 정보예요.</p>
+          <div id="warn" class="warn" hidden></div>
+        </div>
+      </section>
+
+      <section id="panel-settings" class="panel" hidden>
+        <div id="work-rule" class="rule" hidden>
+          <p class="label">적용된 근무규칙</p>
+          <dl class="rows">
+            <div class="row"><dt>규칙 이름</dt><dd id="rule-name">-</dd></div>
+            <div class="row"><dt>기본 근무시간</dt><dd id="rule-standard">-</dd></div>
+          </dl>
+        </div>
+
+        <label class="field">
+          <span>하루 근무시간 (시간)</span>
+          <input id="daily-hours" type="number" min="1" max="24" step="0.5" />
+        </label>
+        <p class="hint">
+          그룹웨어가 알려주는 하루 소정 근로시간은 8시간입니다. 다르게 계산하고 싶을 때만 바꾸세요.
+        </p>
+        <button id="save-settings" class="btn">저장</button>
+        <p id="settings-saved" class="hint" hidden>저장했어요.</p>
+
+        <hr class="sep" />
+
+        <p class="label">문제가 있을 때</p>
+        <button id="diagnose" class="btn">연결 진단</button>
+        <ul id="diagnose-result" class="diagnose" hidden></ul>
+
+        <label class="field" style="margin-top: 14px">
+          <span>사번 직접 입력</span>
+          <input id="emp-code" type="text" placeholder="숫자만 입력" />
+        </label>
+        <p class="hint">
+          그룹웨어에 접속해도 사번을 못 읽을 때만 쓰세요.
+          그룹웨어 <b>개인인사정보</b>에서 확인할 수 있습니다.
+        </p>
+        <button id="save-emp" class="btn">사번 저장</button>
+
+        <hr class="sep" />
+
+        <div class="founder">
+          <span class="founder-label">founder</span>
+          <span class="founder-name">jean.lee</span>
+        </div>
+      </section>
+
+      <section id="panel-records" class="panel" hidden>
+        <div class="month-nav">
+          <button id="prev-month" class="nav-btn" title="이전 달" aria-label="이전 달"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+          <span id="month-label">-</span>
+          <button id="next-month" class="nav-btn" title="다음 달" aria-label="다음 달"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+        </div>
+
+        <div id="calendar" class="cal">
+          <div class="cal-head">
+            <span class="sun">일</span><span>월</span><span>화</span><span>수</span>
+            <span>목</span><span>금</span><span>토</span>
+          </div>
+          <div id="cal-grid" class="cal-grid"></div>
+        </div>
+
+        <p id="cal-summary" class="cal-summary"></p>
+        <div id="day-detail" class="day-detail" hidden></div>
+
+        <div id="leave-section" hidden>
+          <div class="section-head">
+            <p class="label">휴가</p>
+            <span id="leave-remain" class="remain"></span>
+          </div>
+          <ul id="leave-list" class="leave-list"></ul>
+        </div>
+
+        <p id="record-empty" class="empty" hidden>이 달 기록이 아직 없어요.</p>
+        <p id="record-loading" class="empty" hidden>불러오는 중…</p>
+      </section>
+      <section id="panel-alerts" class="panel" hidden>
+        <div class="section-head alerts-head">
+          <p class="label">알림</p>
+          <span id="alert-count" class="alert-count"></span>
+        </div>
+        <ul id="alert-list" class="alert-list"></ul>
+        <p id="alert-empty" class="empty" hidden>알림이 없어요.</p>
+        <p id="alert-loading" class="empty" hidden>불러오는 중…</p>
+        <div id="alert-notice" class="notice" hidden>
+          <p id="alert-notice-text"></p>
+          <button id="alert-notice-action" class="btn" hidden>그룹웨어 열기</button>
+        </div>
+        <p id="alert-poll" class="note"></p>
+      </section>
+
+    </main>
+
+    <footer class="foot">
+      <span id="fetched">-</span>
+      <span class="foot-actions">
+        <button id="refresh" class="link" title="새로고침"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg><span id="refresh-text">새로고침</span></button>
+        <button id="open-settings" class="link" title="설정">설정</button>
+        <button id="open-gw" class="link">그룹웨어<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+      </span>
+    </footer>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
