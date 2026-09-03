@@ -517,11 +517,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-// 단축키는 열려 있는 팝업(또는 사이드패널)에 그대로 넘긴다.
-chrome.commands.onCommand.addListener((command) => {
-  chrome.runtime.sendMessage({ type: 'command', command }, () => void chrome.runtime.lastError);
-});
-
 // 툴바 아이콘은 팝업을 쓰고, 사이드패널은 사용자가 따로 열 수 있게 열어 둔다.
 chrome.runtime.onInstalled.addListener(() => {
   // sidePanel 은 크롬 버전에 따라 없을 수 있다. 여기서 터지면 설치 훅 전체가 죽는다.

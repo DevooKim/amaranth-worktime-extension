@@ -31,7 +31,6 @@ function installChromeStub(store = {}) {
     },
     action: { setIcon: async () => {}, setBadgeText: async () => {} },
     windows: { create: () => {} },
-    commands: { onCommand: { addListener: (fn) => (listeners.command = fn) } },
     storage: {
       local: {
         get: async (key) => {
@@ -96,7 +95,6 @@ test('ping 에 응답한다 (팝업이 워커 버전을 확인하는 통로)', a
 test('background 가 로드되고 메시지 리스너를 등록한다', async () => {
   const listeners = await setup();
   assert.equal(typeof listeners.message, 'function');
-  assert.equal(typeof listeners.command, 'function');
 });
 
 test('사번이 없으면 이유가 담긴 응답을 준다 (빈 메시지로 새어 나가지 않는다)', async () => {

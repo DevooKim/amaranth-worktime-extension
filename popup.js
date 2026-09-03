@@ -857,12 +857,7 @@ async function load({ force = false } = {}) {
   if (thisMonth) showMonth(viewMonth ?? thisMonth);
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== 'command') return;
-  if (message.command === 'toggle_time') toggleHero();
-  if (message.command === 'toggle_tab') toggleTab();
-});
-
+// 팝업이 열려 있는 동안만 듣는 키. 전역 단축키(manifest commands)는 쓰지 않는다.
 document.addEventListener('keydown', (e) => {
   if (!e.altKey || !e.shiftKey) return;
   const key = e.key.toLowerCase();
