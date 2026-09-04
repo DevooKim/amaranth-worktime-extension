@@ -19,6 +19,7 @@
         empSeq: uc.empSeq ? String(uc.empSeq) : null,
         groupSeq: uc.groupSeq ? String(uc.groupSeq) : null,
         deptSeq: uc.deptSeq ? String(uc.deptSeq) : null,
+        deptName: uc.deptName || '',
         emailAddr: email.split('@')[0] || '',
         emailDomain: uc.emailDomain || (email.split('@')[1] ?? ''),
       };

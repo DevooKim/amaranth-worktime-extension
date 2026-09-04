@@ -6,17 +6,21 @@ import {
   fetchWorkRows,
   fetchHolidays,
   fetchLeaves,
+  fetchTeamLeaves,
   fetchAnnualLeave,
   fetchAlerts,
   fetchCompanyInfo,
+  fetchRoster,
   markAlertsRead,
   AuthError,
 } from './lib/api.js';
 import { alertIdentity, alertTitle, alertContent, countUnread, isUnread } from './lib/alerts.js';
+import { fetchLatestVersion, compareVersions, RELEASES_URL } from './lib/update.js';
 import { setUnreadDot } from './lib/icon.js';
 import {
   computeStatus,
   buildCalendar,
+  buildTeamCalendar,
   formatDate,
   monthRange,
   shiftMonth,
@@ -146,6 +150,66 @@ async function loadRecords(ym) {
   };
 }
 
+/** [근태] 탭. 팀 전체 휴가 일정을 달력으로 만든다. */
+const ROSTER_KEY = 'roster';
+const ROSTER_TTL_MS = 12 * 60 * 60 * 1000; // 조직 개편은 드물다. 하루 두 번이면 충분.
+
+/** 전사 직원 명부. 그룹 편집 목록의 재료다. */
+async function loadRoster({ force } = {}) {
+  if (!force) {
+    const { [ROSTER_KEY]: entry } = await chrome.storage.local.get(ROSTER_KEY);
+    if (entry && Date.now() - entry.savedAt < ROSTER_TTL_MS) {
+      return { ok: true, people: entry.value, fetchedAt: entry.savedAt };
+    }
+  }
+
+  const credentials = await readCredentials();
+  const people = await fetchRoster(credentials);
+  const savedAt = Date.now();
+  await chrome.storage.local.set({ [ROSTER_KEY]: { value: people, savedAt } });
+  return { ok: true, people, fetchedAt: savedAt };
+}
+
+async function loadTeam(ym) {
+  const identity = await getIdentity();
+  if (!identity?.empCd) {
+    return { ok: false, reason: 'no-identity', message: '사번을 아직 못 읽었어요.' };
+  }
+
+  const credentials = await readCredentials();
+  const { from, to } = monthRange(ym);
+  const keys = { team: `team:${ym}`, holidays: `holidays:${ym}` };
+
+  const [cachedTeam, cachedHolidays] = await Promise.all([
+    readCache(keys.team),
+    readCache(keys.holidays),
+  ]);
+
+  const [leaves, holidays] = await Promise.all([
+    cachedTeam ?? fetchTeamLeaves(credentials, identity, { from, to }),
+    cachedHolidays ?? fetchHolidays(credentials, { coCd: identity.coCd, from, to }),
+  ]);
+
+  if (!cachedTeam) await writeCache(keys.team, leaves || []);
+  if (!cachedHolidays) await writeCache(keys.holidays, holidays || []);
+
+  return {
+    ok: true,
+    month: ym,
+    calendar: buildTeamCalendar({
+      ym,
+      leaves: leaves || [],
+      holidays: holidays || [],
+      today: formatDate(new Date()),
+    }),
+    // 부서 필터는 화면에서 걸러 쓴다. 매번 서버에 다시 묻지 않기 위해서다.
+    leaves: leaves || [],
+    holidays: holidays || [],
+    myDept: identity.deptName || null,
+    fetchedAt: Date.now(),
+  };
+}
+
 function failure(err, stale) {
   return {
     ok: false,
@@ -228,7 +292,7 @@ async function handleGetStatus({ force } = {}) {
   try {
     if (force) {
       const ym = formatDate(new Date()).slice(0, 6);
-      await chrome.storage.local.remove([`rows:${ym}`, `holidays:${ym}`, `leaves:${ym}`]);
+      await chrome.storage.local.remove([`rows:${ym}`, `holidays:${ym}`, `leaves:${ym}`, `team:${ym}`]);
     }
     const result = await loadStatus();
     if (result.ok) await chrome.storage.local.set({ [RESULT_KEY]: result });
@@ -417,21 +481,105 @@ async function getCompanyInfo(credentials) {
 
 /** 읽음 처리 후 목록과 아이콘을 바로 맞춘다. 다음 폴링까지 두면 읽은 알림에 점이 남는다. */
 async function markRead(alertIds) {
+  const ids = (alertIds || []).filter(Boolean);
+  // id 가 없으면 서버에 보낼 것이 없다. 조용히 성공으로 처리하면
+  // 화면만 읽음으로 바뀌고 서버는 그대로라 다시 열면 되돌아온다.
+  if (!ids.length) {
+    return { ok: false, message: '이 알림에는 읽음 처리에 쓸 id 가 없어요.' };
+  }
+
   try {
     const credentials = await readCredentials();
-    await markAlertsRead(credentials, await getCompanyInfo(credentials), alertIds);
-    await pollAlerts();
-    return { ok: true };
+    await markAlertsRead(credentials, await getCompanyInfo(credentials), ids);
   } catch (err) {
     return { ok: false, message: err?.message || String(err) };
   }
+
+  // 여기까지 왔으면 서버에는 이미 반영됐다.
+  // 목록 갱신은 곁다리이므로 실패해도 읽음 처리를 실패로 되돌리지 않는다.
+  try {
+    await pollAlerts();
+  } catch (err) {
+    return { ok: true, staleList: true };
+  }
+  return { ok: true };
+}
+
+
+// ─── 새 버전 확인 ─────────────────────────────────────────────────────
+// 웹스토어가 아니라 zip 으로 나눠 쓰는 확장이라 크롬이 알아서 갱신해 주지 않는다.
+// 하루 한 번 저장소의 manifest.json 을 보고, 새 버전이면 한 번만 알려 준다.
+
+const UPDATE_ALARM = 'check-update';
+const UPDATE_PERIOD_MINUTES = 12 * 60;
+const UPDATE_KEY = 'updateCheck';        // storage.local — 마지막 확인 결과
+const UPDATE_NOTIFIED_KEY = 'updateNotified'; // storage.local — 이미 알린 버전
+const UPDATE_NOTI_ID = 'gw-worktime:update';
+
+function currentVersion() {
+  return chrome.runtime.getManifest().version;
+}
+
+async function ensureUpdateAlarm() {
+  const existing = await chrome.alarms.get(UPDATE_ALARM);
+  if (existing && existing.periodInMinutes === UPDATE_PERIOD_MINUTES) return;
+  await chrome.alarms.create(UPDATE_ALARM, {
+    periodInMinutes: UPDATE_PERIOD_MINUTES,
+    delayInMinutes: 1,
+  });
+}
+
+/**
+ * 새 버전이 있는지 확인한다.
+ * 네트워크가 막혀 있어도 확장 전체가 흔들리지 않게 실패를 값으로 돌려준다.
+ */
+async function checkUpdate({ notify: shouldNotify = false } = {}) {
+  const current = currentVersion();
+  let latest;
+  try {
+    latest = await fetchLatestVersion();
+  } catch (err) {
+    const result = { ok: false, current, url: RELEASES_URL, message: err?.message || String(err) };
+    await chrome.storage.local.set({ [UPDATE_KEY]: { ...result, checkedAt: Date.now() } });
+    return result;
+  }
+
+  const behind = compareVersions(latest, current) > 0;
+  const result = { ok: true, current, latest, behind, url: RELEASES_URL, checkedAt: Date.now() };
+  await chrome.storage.local.set({ [UPDATE_KEY]: result });
+
+  if (shouldNotify && behind) await notifyUpdate(latest);
+  return result;
+}
+
+/** 같은 버전을 두 번 알리지 않는다. */
+async function notifyUpdate(latest) {
+  const { [UPDATE_NOTIFIED_KEY]: already } = await chrome.storage.local.get(UPDATE_NOTIFIED_KEY);
+  if (already === latest) return;
+  if (!(await notificationsAllowed())) return;
+
+  await chrome.notifications.create(UPDATE_NOTI_ID, {
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: `새 버전 ${latest} 이 나왔어요`,
+    message: '눌러서 받으러 가기. 받은 뒤 확장 프로그램 페이지에서 새로고침하면 끝이에요.',
+    contextMessage: `지금 쓰는 버전 ${currentVersion()}`,
+    requireInteraction: true,
+  });
+  await chrome.storage.local.set({ [UPDATE_NOTIFIED_KEY]: latest });
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALERT_ALARM) pollAlerts();
+  if (alarm.name === UPDATE_ALARM) checkUpdate({ notify: true });
 });
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
+  if (notificationId === UPDATE_NOTI_ID) {
+    chrome.tabs.create({ url: RELEASES_URL });
+    chrome.notifications.clear(notificationId);
+    return;
+  }
   const targets = await getSession(NOTI_TARGETS_KEY, {});
   const target = targets[notificationId];
   if (target) openAlertWindow(target.url);
@@ -450,16 +598,18 @@ chrome.notifications.onClosed.addListener(async (notificationId) => {
 
 chrome.runtime.onStartup.addListener(() => {
   ensureAlertAlarm();
+  ensureUpdateAlarm();
   pollAlerts();
 });
 
 // 서비스 워커가 깨어날 때 알람이 없으면(업데이트 직후 등) 다시 걸어 둔다.
 ensureAlertAlarm();
+ensureUpdateAlarm();
 
 // 팝업이 "지금 돌고 있는 서비스 워커가 최신인지" 확인하는 용도.
 // 팝업 파일은 열 때마다 다시 읽히지만 서비스 워커는 확장을 새로고침해야 바뀌기 때문에,
 // 이 응답이 없으면 예전 워커가 남아 있다는 뜻이다.
-const BUILD = 11;
+const BUILD = 13;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'ping') {
@@ -472,6 +622,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === 'getRecords' && message.month) {
     handleGetRecords(message).then(sendResponse);
+    return true;
+  }
+  if (message?.type === 'getTeam' && message.month) {
+    loadTeam(message.month)
+      .then(sendResponse)
+      .catch((err) => sendResponse(failure(err, null)));
+    return true;
+  }
+  if (message?.type === 'checkUpdate') {
+    // 팝업이 열 때마다 부르므로, 강제가 아니면 저장된 결과를 쓴다.
+    (message.force
+      ? checkUpdate()
+      : chrome.storage.local.get(UPDATE_KEY).then(({ [UPDATE_KEY]: saved }) =>
+          saved && Date.now() - saved.checkedAt < UPDATE_PERIOD_MINUTES * 60 * 1000
+            ? saved
+            : checkUpdate()
+        )
+    )
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, current: currentVersion(), url: RELEASES_URL, message: String(err) }));
+    return true;
+  }
+  if (message?.type === 'getRoster') {
+    loadRoster({ force: message.force })
+      .then(sendResponse)
+      .catch((err) => sendResponse(failure(err, null)));
     return true;
   }
   if (message?.type === 'getAlerts') {
@@ -489,11 +665,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   // 창을 여는 순간 팝업이 닫히므로 읽음 처리까지 여기서 한다.
+  // 응답을 먼저 돌려주고 끝내면 서비스 워커가 잠들어 읽음 처리가 서버에 닿지 않을 수 있다.
+  // 끝날 때까지 채널을 열어 둬서 워커를 붙잡는다.
   if (message?.type === 'openAlert') {
     openAlertWindow(message.url);
-    if (Array.isArray(message.alertIds) && message.alertIds.length) markRead(message.alertIds);
-    sendResponse({ ok: true });
-    return false;
+    const ids = Array.isArray(message.alertIds) ? message.alertIds : [];
+    if (!ids.length) {
+      sendResponse({ ok: true });
+      return false;
+    }
+    markRead(ids)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, message: err?.message || String(err) }));
+    return true;
   }
   if (message?.type === 'diagnose') {
     diagnose()
@@ -528,5 +712,7 @@ chrome.runtime.onInstalled.addListener(() => {
   // 확장을 새로 로드하면 예전 스키마의 캐시는 버린다.
   chrome.storage.local.remove(RESULT_KEY);
   ensureAlertAlarm();
+  ensureUpdateAlarm();
   pollAlerts();
+  checkUpdate();
 });

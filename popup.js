@@ -6,6 +6,7 @@ import {
   parseDate,
   lunchDeduction,
   normalizeStatus,
+  buildTeamCalendar,
   shiftMonth,
   expandLeaves,
   STANDARD_MINUTES,
@@ -16,13 +17,13 @@ import { isUnread, countUnread, parseCreateDate, alertTitle } from './lib/alerts
 
 const GW_URL = 'https://gw.goorm.io/#/';
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
-const VIEW_KEY = 'heroView'; // 'leave' | 'shortage'
+const VIEW_KEY = 'heroView'; // HERO_VIEWS 중 하나
 
 const $ = (id) => document.getElementById(id);
 
 let current = null; // 마지막으로 렌더한 status
 let currentFetchedAt = null;
-let heroView = 'leave';
+let heroView = 'today';
 let tickTimer = null;
 // 이번 달 'yyyyMM'. 다음 달로 넘어가지 못하게 막는 기준.
 // 서버 응답이 실패해도 [기록] 탭은 쓸 수 있어야 하므로 로컬 시계로 먼저 채운다.
@@ -67,47 +68,91 @@ function showNotice(text, withAction) {
 }
 
 /** 큰 숫자 영역. 클릭이나 Alt+Shift+T 로 오늘 근무 시간과 이번 달 부족한 시간을 오간다. */
-function renderHero(status) {
-  const label = $('hero-label');
-  const hero = $('hero');
-  const sub = $('hero-sub');
+/**
+ * 히어로에 담을 값. 사람마다 궁금한 게 달라서 눌러 가며 바꾼다.
+ * 고른 값은 저장되어 다음에 열 때도 유지된다.
+ */
+const HERO_VIEWS = ['today', 'leave', 'month'];
 
-  if (heroView === 'shortage') {
-    label.textContent = '이번 달 부족한 시간';
-    if (status.shortage <= 0) {
-      hero.textContent = '다 채웠어요';
-      sub.textContent = `이번 달 ${formatDuration(status.accumulated)} 근무`;
-    } else {
-      hero.textContent = formatDuration(status.shortage);
-      sub.textContent =
-        status.remainingWorkDays > 0
-          ? `남은 ${status.remainingWorkDays}일 · 하루 ${formatDuration(status.todayTarget)}씩`
-          : '이번 달 남은 근무일이 없어요';
-    }
-    return;
+function heroContent(status, view) {
+  const day = status.dailyMinutes || STANDARD_MINUTES;
+  const dayPct = day > 0 ? Math.min(1, status.todayWorked / day) : 0;
+  const monthPct = status.progressRatio || 0;
+  const dayBar = {
+    fill: dayPct,
+    left: `${formatDuration(Math.max(0, day - status.todayWorked))} 남음`,
+    right: `${formatDuration(day)} 중 ${Math.round(dayPct * 100)}%`,
+  };
+
+  if (view === 'leave') {
+    // 몇 시에 나갈 수 있는지만 보면 되는 사람
+    const at = status.estimatedLeave ?? status.dailyLeave;
+    return {
+      label: '퇴근 가능 시각',
+      value: at != null ? formatClock(at) : status.state === 'done' ? '퇴근 완료' : '출근 전',
+      pill: `권장 ${formatDuration(status.todayTarget || day)}`,
+      sub:
+        status.comeMinutes != null
+          ? `${formatClock(status.comeMinutes)} 출근 · 휴게 12–13시 제외`
+          : '출근을 찍으면 계산됩니다',
+      bar: { ...dayBar, left: `${formatDuration(status.todayWorked)} 근무` },
+    };
   }
 
-  label.textContent = '오늘 근무 시간';
+  if (view === 'month') {
+    // 월 단위로 관리하는 사람
+    return {
+      label: '이번 달 누적',
+      value: formatDuration(status.accumulated),
+      pill: status.remainingWorkDays > 0 ? `남은 ${status.remainingWorkDays}일` : '',
+      sub: `소정 ${formatDuration(status.monthStandard)}${
+        status.shortage > 0 ? ` · ${formatDuration(status.shortage)} 부족` : ' · 다 채웠어요'
+      }`,
+      bar: {
+        fill: monthPct,
+        left: `${Math.round(monthPct * 100)}% 채움`,
+        right: `/ ${formatDuration(status.monthStandard)}`,
+      },
+    };
+  }
 
-  if (status.state === 'working') {
-    hero.textContent = formatDuration(status.todayWorked);
-    const parts = [`${formatClock(status.comeMinutes)} 출근`];
-    if (status.estimatedLeave != null) parts.push(`퇴근 가능 ${formatClock(status.estimatedLeave)}`);
-    else if (status.dailyLeave != null) parts.push(`${formatDuration(status.dailyMinutes)} 기준 ${formatClock(status.dailyLeave)}`);
-    sub.textContent = parts.join(' · ');
-  } else if (status.state === 'done') {
-    hero.textContent = formatDuration(status.todayWorked);
-    sub.textContent =
-      status.leaveMinutes != null
-        ? `${formatClock(status.comeMinutes)} 출근 · ${formatClock(status.leaveMinutes)} 퇴근`
-        : '퇴근 완료';
-  } else if (status.remainingWorkDays === 0) {
-    hero.textContent = '—';
-    sub.textContent = '이번 달 남은 근무일이 없어요';
+  // 기본값 — 지금까지 얼마나 일했나
+  let value;
+  let sub;
+  if (status.state === 'before') {
+    value = '출근 전';
+    sub = `오늘 권장 ${formatDuration(status.todayTarget || day)}`;
   } else {
-    hero.textContent = '출근 전';
-    sub.textContent = `오늘 권장 ${formatDuration(status.todayTarget)}`;
+    value = formatDuration(status.todayWorked);
+    const parts = [`${formatClock(status.comeMinutes)} 출근`];
+    if (status.state === 'done' && status.leaveMinutes != null) {
+      parts.push(`${formatClock(status.leaveMinutes)} 퇴근`);
+    } else if (status.estimatedLeave != null) {
+      parts.push(`${formatClock(status.estimatedLeave)} 퇴근 가능`);
+    }
+    sub = parts.join(' · ');
   }
+  const leaveAt = status.estimatedLeave ?? status.dailyLeave;
+  return {
+    label: '오늘 근무 시간',
+    value,
+    pill: status.state !== 'done' && leaveAt != null ? `${formatClock(leaveAt)} 퇴근` : '',
+    sub,
+    bar: dayBar,
+  };
+}
+
+function renderHero(status) {
+  const view = HERO_VIEWS.includes(heroView) ? heroView : HERO_VIEWS[0];
+  const c = heroContent(status, view);
+
+  $('hero-label').textContent = c.label;
+  $('hero').textContent = c.value;
+  $('hero-sub').textContent = c.sub;
+  $('hero-pill').textContent = c.pill || '';
+  $('bar-fill').style.width = `${Math.round(c.bar.fill * 100)}%`;
+  $('bar-left').textContent = c.bar.left;
+  $('bar-right').textContent = c.bar.right;
 }
 
 function renderToday(rawStatus, fetchedAt, staleNote) {
@@ -138,11 +183,6 @@ function renderToday(rawStatus, fetchedAt, staleNote) {
   $('date').textContent = headerDate(status.today);
 
   renderHero(status);
-
-  const monthPercent = Math.round((status.progressRatio ?? 0) * 100);
-  $('bar-fill').style.width = `${monthPercent}%`;
-  $('bar-left').innerHTML = `<b>${formatDuration(status.accumulated)}</b> 이번 달 근무`;
-  $('bar-right').textContent = `${formatDuration(status.monthStandard)} 중 ${monthPercent}%`;
 
   $('daily-label').textContent = `${formatDuration(status.dailyMinutes)} 기준`;
   $('today-remaining').textContent =
@@ -285,21 +325,39 @@ function renderAnnualLeave(annual) {
 
   box.hidden = false;
   $('lb-num').textContent = formatDays(annual.remaining);
+  $('lb-used').textContent = `총 ${formatDays(annual.total)}일 중 ${formatDays(annual.used)}일 사용`;
 
   // 연차는 종류별로 따로 쌓인다. 합계만 보면 무엇이 남았는지 알 수 없다.
   const kinds = [
-    ['연차', annual.basic],
-    ['보상', annual.compensation],
-    ['대체', annual.substitute],
+    ['일반 연차', annual.basic],
+    ['보상 휴가', annual.compensation],
+    ['대체 휴가', annual.substitute],
   ].filter(([, b]) => b && b.total > 0);
 
-  const meta = [];
-  if (kinds.length > 1) {
-    meta.push(kinds.map(([label, b]) => `${label} ${formatDays(b.remaining)}`).join(' · '));
+  const list = $('lb-kinds');
+  list.innerHTML = '';
+  // 한 종류뿐이면 큰 숫자와 같은 말이라 굳이 나누지 않는다.
+  list.hidden = kinds.length < 2;
+  for (const [label, b] of kinds) {
+    const li = document.createElement('li');
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = label;
+    const v = document.createElement('span');
+    v.className = b.remaining > 0 ? 'v' : 'v is-zero';
+    v.textContent = `${formatDays(b.remaining)}일`;
+    li.append(k, v);
+    list.appendChild(li);
   }
-  meta.push(`총 ${formatDays(annual.total)}일 중 ${formatDays(annual.used)}일 사용`);
-  if (annual.pending > 0) meta.push(`처리 중 ${formatDays(annual.pending)}일`);
-  $('lb-meta').textContent = meta.join('\n');
+
+  const old = box.querySelector('.lb-pending');
+  if (old) old.remove();
+  if (annual.pending > 0) {
+    const chip = document.createElement('p');
+    chip.className = 'lb-pending';
+    chip.textContent = `결재 중 ${formatDays(annual.pending)}일`;
+    box.appendChild(chip);
+  }
 
   remain.textContent = `${formatDays(annual.remaining)}일 남음`;
 }
@@ -315,6 +373,7 @@ function calCellLabel(cell) {
 }
 
 function renderDayDetail(cell) {
+  // 안내 문구는 달력 위에 늘 붙여 둔다. 감췄다 보였다 하면 달력이 위아래로 튄다.
   const box = $('day-detail');
   if (!cell) {
     box.hidden = true;
@@ -351,7 +410,6 @@ function renderCalendar(calendar, status) {
   renderDayDetail(null);
 
   if (!calendar?.weeks) {
-    $('cal-summary').textContent = '';
     return;
   }
 
@@ -441,25 +499,7 @@ function renderCalendar(calendar, status) {
     }
   }
 
-  const t = calendar.totals;
-  const lines = [];
-
-  // 근무일 수가 어떻게 나왔는지 함께 보여 준다 — 공휴일이 몇 개 빠졌는지가 안 보이면
-  // "9월 평일은 22일 아니냐" 는 의문이 남는다.
-  const bd = status?.workDayBreakdown;
-  const showBreakdown = bd && calendar.ym === status.today?.slice(0, 6) && bd.holidayWeekdays > 0;
-  lines.push(
-    showBreakdown
-      ? `근무일 ${t.workDays}일 — 평일 ${bd.weekdays}일 − 공휴일 ${bd.holidayWeekdays}일`
-      : `근무일 ${t.workDays}일`
-  );
-  const standardTotal = t.workDays * (status?.dailyMinutes || 480);
-  lines.push(`이번 달 ${formatDuration(t.workedTotal)} 근무 · 소정 ${formatDuration(standardTotal)}`);
-  if (t.missingLeave.length) {
-    lines.push(`퇴근 미등록 ${t.missingLeave.length}일 — ${t.missingLeave.map(shortDate).join(', ')}`);
-  }
-
-  $('cal-summary').textContent = lines.join('\n');
+  // 달력 아래 요약은 두지 않는다. 필요한 수치는 [오늘] 탭에 이미 있다.
 }
 
 const monthCache = new Map(); // 'yyyyMM' → { calendar, leaves }
@@ -488,7 +528,7 @@ function icon(name) {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // background.js 의 BUILD 와 같은 값이어야 한다. 파일을 고칠 때 함께 올린다.
-const EXPECTED_BUILD = 11;
+const EXPECTED_BUILD = 13;
 const STALE_WORKER_MESSAGE =
   '확장을 새로고침해 주세요. chrome://extensions 에서 gw-worktime 카드의 ↻ 를 누르면 됩니다. ' +
   '(팝업은 최신인데 백그라운드가 예전 버전으로 남아 있어요)';
@@ -563,7 +603,6 @@ async function showMonth(ym) {
   }
 
   $('cal-grid').innerHTML = '';
-  $('cal-summary').textContent = '';
   $('record-empty').hidden = true;
   $('leave-section').hidden = true;
   renderDayDetail(null);
@@ -584,13 +623,430 @@ async function showMonth(ym) {
   renderCalendar(res.calendar, current);
 }
 
+let teamMonth = null; // [휴가] 탭이 보고 있는 달
+let teamSelected = null; // 고른 날짜
+let teamDept = 'mine'; // 'all' | 'mine' | 'group' | 부서명. 기본은 내 부서
+let teamGroup = []; // 내가 고른 사람 이름들
+let teamRaw = null; // { leaves, holidays, myDept } — 필터를 화면에서 걸기 위해 원본을 들고 있는다
+const teamCache = new Map(); // 'yyyyMM' → { leaves, holidays, myDept }
+const DEPT_KEY = 'teamDept';
+const GROUP_KEY = 'teamGroup';
+
+/** 그날 쉬는 사람을 점으로. 숫자를 읽지 않아도 많고 적음이 보인다. */
+function teamPips(cell) {
+  const wrap = document.createElement('span');
+  wrap.className = 'pips';
+  // 점만 찍는다. 정확한 인원은 눌러서 명단으로 본다.
+  const MAX = 6;
+  for (const person of cell.people.slice(0, MAX)) {
+    const pip = document.createElement('i');
+    pip.className = 'pip' + (person.isMe ? ' is-me' : '');
+    wrap.appendChild(pip);
+  }
+  return wrap;
+}
+
+function renderTeamDay(cell) {
+  const list = $('team-list');
+  const head = $('team-day');
+  const count = $('team-count');
+  list.innerHTML = '';
+
+  if (!cell) {
+    head.textContent = '날짜를 선택하세요';
+    count.textContent = '';
+    return;
+  }
+
+  head.textContent = labelDate(cell.date) + (cell.holidayName ? ` · ${cell.holidayName}` : '');
+  count.textContent = cell.count ? `${cell.count}명` : '';
+
+  if (!cell.count) {
+    const li = document.createElement('li');
+    const none = document.createElement('span');
+    none.className = 'none';
+    none.textContent = cell.isWorkday ? '이 날은 휴가가 없어요' : '휴일이에요';
+    li.appendChild(none);
+    list.appendChild(li);
+    return;
+  }
+
+  for (const person of cell.people) {
+    const li = document.createElement('li');
+    if (person.isMe) li.className = 'is-me';
+
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = person.person || '이름 없음';
+
+    const dept = document.createElement('span');
+    dept.className = 'dept';
+    dept.textContent = person.dept || '';
+
+    li.append(who, dept);
+    if (person.isMe) {
+      const badge = document.createElement('span');
+      badge.className = 'me-badge';
+      badge.textContent = '나';
+      li.appendChild(badge);
+    }
+
+    const kind = document.createElement('span');
+    kind.className = 'kind';
+    kind.textContent = fullLeaveName(person.name);
+    li.appendChild(kind);
+
+    list.appendChild(li);
+  }
+}
+
+function renderTeamCalendar(calendar) {
+  const grid = $('team-grid');
+  grid.innerHTML = '';
+  if (!calendar?.weeks) return;
+
+  const cells = calendar.weeks.flat().filter(Boolean);
+  let pick =
+    cells.find((c) => c.date === teamSelected) ||
+    cells.find((c) => c.isToday) ||
+    cells.find((c) => c.count > 0) ||
+    cells[0];
+
+  for (const week of calendar.weeks) {
+    for (const cell of week) {
+      if (!cell) {
+        const blank = document.createElement('div');
+        blank.className = 'cal-cell empty';
+        grid.appendChild(blank);
+        continue;
+      }
+
+      const el = document.createElement('button');
+      el.type = 'button';
+      const classes = ['cal-cell'];
+      if (cell.weekday === 0) classes.push('sun');
+      if (cell.isHoliday) classes.push('holiday');
+      if (!cell.isWorkday) classes.push('off');
+      if (cell.isToday) classes.push('today');
+      if (cell.hasMe) classes.push('has-me');
+      el.className = classes.join(' ');
+      el.setAttribute('aria-pressed', String(cell.date === pick?.date));
+      el.setAttribute(
+        'aria-label',
+        `${labelDate(cell.date)}${cell.count ? `, ${cell.count}명 휴가` : ''}`
+      );
+      if (cell.holidayName) el.title = cell.holidayName;
+
+      const num = document.createElement('span');
+      num.className = 'num';
+      num.textContent = String(cell.day);
+      el.appendChild(num);
+
+      if (cell.count) el.appendChild(teamPips(cell));
+      else if (cell.holidayName) {
+        const tag = document.createElement('span');
+        tag.className = 'holi-tag';
+        tag.textContent = shortHolidayName(cell.holidayName);
+        el.appendChild(tag);
+      }
+
+      el.addEventListener('click', () => {
+        teamSelected = cell.date;
+        for (const other of grid.querySelectorAll('[aria-pressed="true"]')) {
+          other.setAttribute('aria-pressed', 'false');
+        }
+        el.setAttribute('aria-pressed', 'true');
+        renderTeamDay(cell);
+      });
+
+      grid.appendChild(el);
+    }
+  }
+
+  renderTeamDay(pick);
+}
+
+/** 고른 부서만 남긴다. 'mine' 은 내 부서. */
+function filterLeaves(leaves, myDept) {
+  if (teamDept === 'all') return leaves;
+  if (teamDept === 'group') {
+    if (!teamGroup.length) return leaves;
+    const set = new Set(teamGroup);
+    return leaves.filter((x) => set.has(x.person));
+  }
+  const want = teamDept === 'mine' ? myDept : teamDept;
+  if (!want) return leaves; // 내 부서를 모르면 거르지 않는다
+  return leaves.filter((x) => x.dept === want);
+}
+
+/** 보기 범위 목록을 만든다. 자주 쓰는 셋은 위로, 부서는 아래에 따로. */
+function fillDeptOptions(leaves, myDept) {
+  const counts = new Map();
+  for (const x of leaves) {
+    if (!x.dept) continue;
+    counts.set(x.dept, (counts.get(x.dept) || 0) + 1);
+  }
+
+  const groupSet = new Set(teamGroup);
+  const groupCount = teamGroup.length ? leaves.filter((x) => groupSet.has(x.person)).length : 0;
+
+  const quick = [{ value: 'all', name: '전체 부서', count: leaves.length }];
+  if (myDept) quick.push({ value: 'mine', name: `우리 팀 · ${myDept}`, count: counts.get(myDept) || 0 });
+  if (teamGroup.length) {
+    quick.push({ value: 'group', name: `내 그룹 · ${teamGroup.length}명`, count: groupCount });
+  }
+
+  const depts = [...counts]
+    .filter(([d]) => d !== myDept)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, count]) => ({ value: name, name, count }));
+
+  // 고른 값이 사라졌으면 우리 팀으로. 우리 팀을 모를 때만 전체.
+  const known = new Set([...quick, ...depts].map((o) => o.value));
+  if (!known.has(teamDept)) teamDept = myDept ? 'mine' : 'all';
+
+  const render = (items, host) => {
+    host.innerHTML = '';
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'scope-item';
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-selected', String(item.value === teamDept));
+
+      const tick = icon('check');
+      tick.classList.add('tick');
+
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = item.name;
+
+      const ct = document.createElement('span');
+      ct.className = 'ct';
+      ct.textContent = `${item.count}건`;
+
+      btn.append(tick, nm, ct);
+      btn.addEventListener('click', () => {
+        teamDept = item.value;
+        teamSelected = null;
+        chrome.storage.local.set({ [DEPT_KEY]: teamDept });
+        closeScopeMenu();
+        paintTeam();
+      });
+      host.appendChild(btn);
+    }
+  };
+
+  render(quick, $('scope-quick'));
+  render(depts, $('scope-list'));
+
+  const chosen = [...quick, ...depts].find((o) => o.value === teamDept);
+  $('team-scope-label').textContent = chosen?.name ?? '전체 부서';
+  $('team-scope-count').textContent = chosen ? `${chosen.count}건` : '';
+}
+
+function closeScopeMenu() {
+  $('scope-menu').hidden = true;
+  $('team-scope').setAttribute('aria-expanded', 'false');
+}
+
+function toggleScopeMenu() {
+  const menu = $('scope-menu');
+  const open = menu.hidden;
+  menu.hidden = !open;
+  $('team-scope').setAttribute('aria-expanded', String(open));
+}
+
+function paintTeam() {
+  if (!teamRaw) return;
+  fillDeptOptions(teamRaw.leaves, teamRaw.myDept);
+  const { leaves, holidays, myDept } = teamRaw;
+  const calendar = buildTeamCalendar({
+    ym: teamMonth,
+    leaves: filterLeaves(leaves, myDept),
+    holidays,
+    today: thisMonth === teamMonth ? formatToday() : null,
+  });
+  renderTeamCalendar(calendar);
+}
+
+/** 오늘 'yyyyMMdd'. background 응답 없이도 달력이 오늘을 표시할 수 있게. */
+function formatToday() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+}
+
+let roster = null;      // 전사 명부. 한 번 받아 두고 로컬에서 검색한다.
+let rosterError = null;
+
+/** 이 달 휴가 데이터에 등장하는 사람들. 명부를 못 받았을 때의 대비책이다. */
+function peopleOf(leaves) {
+  const map = new Map();
+  for (const x of leaves) {
+    if (!x.person) continue;
+    const cur = map.get(x.person) || { person: x.person, dept: x.dept || '', isMe: false };
+    if (x.isMe) cur.isMe = true;
+    if (!cur.dept && x.dept) cur.dept = x.dept;
+    map.set(x.person, cur);
+  }
+  return [...map.values()];
+}
+
+/** 편집 목록의 재료. 전사 명부가 있으면 그것을, 없으면 이 달 휴가자만. */
+function groupCandidates() {
+  const myName = teamRaw?.leaves?.find((x) => x.isMe)?.person || '';
+  const base = roster?.length ? roster : peopleOf(teamRaw?.leaves || []);
+  const seen = new Set();
+  const out = [];
+  for (const p of base) {
+    if (!p.person || seen.has(p.person)) continue;
+    seen.add(p.person);
+    out.push({ person: p.person, dept: p.dept || '', isMe: p.isMe || p.person === myName });
+  }
+  // 내가 맨 위, 그 다음은 부서 → 이름 순
+  return out.sort((a, b) => {
+    if (a.isMe !== b.isMe) return a.isMe ? -1 : 1;
+    return a.dept.localeCompare(b.dept) || a.person.localeCompare(b.person);
+  });
+}
+
+function renderGroupEditor() {
+  const query = $('ge-search').value.trim();
+  const all = groupCandidates();
+  const picked = new Set(teamGroup);
+  // 고른 사람은 검색과 무관하게 남겨 둔다. 해제하려다 놓치지 않게.
+  const shown = query
+    ? all.filter((p) => p.person.includes(query) || p.dept.includes(query) || picked.has(p.person))
+    : all;
+
+  const list = $('ge-list');
+  list.innerHTML = '';
+  $('ge-loading').hidden = !!(roster || rosterError || all.length);
+  $('ge-empty').hidden = shown.length > 0 || !$('ge-loading').hidden;
+  $('ge-count').textContent = String(teamGroup.length);
+
+  let lastDept = null;
+  for (const person of shown) {
+    // 부서가 바뀌면 머리글을 하나 끼운다. 검색 중에는 순서가 뒤섞이니 생략.
+    const head = person.isMe ? '나' : person.dept || '부서 없음';
+    if (!query && head !== lastDept) {
+      const li = document.createElement('li');
+      li.className = 'ge-dept';
+      li.textContent = head;
+      list.appendChild(li);
+      lastDept = head;
+    }
+
+    const li = document.createElement('li');
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ge-row';
+    row.setAttribute('aria-pressed', String(picked.has(person.person)));
+
+    const box = document.createElement('span');
+    box.className = 'box';
+    box.appendChild(icon('check'));
+
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = person.person;
+
+    row.append(box, nm);
+
+    if (person.isMe) {
+      const me = document.createElement('span');
+      me.className = 'me';
+      me.textContent = '나';
+      row.appendChild(me);
+    }
+
+    const dp = document.createElement('span');
+    dp.className = 'dp';
+    dp.textContent = person.dept;
+    row.appendChild(dp);
+
+    row.addEventListener('click', () => {
+      const on = row.getAttribute('aria-pressed') === 'true';
+      row.setAttribute('aria-pressed', String(!on));
+      teamGroup = on
+        ? teamGroup.filter((n) => n !== person.person)
+        : [...teamGroup, person.person];
+      chrome.storage.local.set({ [GROUP_KEY]: teamGroup });
+      $('ge-count').textContent = String(teamGroup.length);
+    });
+
+    li.appendChild(row);
+    list.appendChild(li);
+  }
+}
+
+/** 전사 명부는 한 번만 받아 온다. 실패해도 이 달 휴가자로는 고를 수 있다. */
+async function loadRoster() {
+  if (roster || rosterError) return;
+  const res = await ask({ type: 'getRoster' });
+  if (res?.ok && Array.isArray(res.people)) roster = res.people;
+  else rosterError = failureText(res) || '직원 목록을 불러오지 못했어요.';
+  renderGroupEditor();
+}
+
+function toggleGroupEditor(open) {
+  const box = $('group-modal');
+  const show = open ?? box.hidden;
+  box.hidden = !show;
+  if (!show) return;
+  $('ge-search').value = '';
+  renderGroupEditor();
+  $('ge-search').focus();
+  loadRoster();
+}
+
+async function showTeamMonth(ym) {
+  teamMonth = ym;
+  $('team-month').textContent = labelMonth(ym);
+  $('team-next').disabled = thisMonth != null && ym >= thisMonth;
+
+  const cached = teamCache.get(ym);
+  if (cached) {
+    $('team-empty').hidden = true;
+    teamRaw = cached;
+    fillDeptOptions(cached.leaves, cached.myDept);
+    paintTeam();
+    return;
+  }
+
+  $('team-grid').innerHTML = '';
+  $('team-list').innerHTML = '';
+  $('team-day').textContent = '';
+  $('team-count').textContent = '';
+  $('team-empty').hidden = true;
+  $('team-loading').hidden = false;
+
+  const res = await ask({ type: 'getTeam', month: ym });
+  if (teamMonth !== ym) return;
+
+  $('team-loading').hidden = true;
+  if (!res.ok) {
+    $('team-empty').hidden = false;
+    $('team-empty').textContent = failureText(res);
+    return;
+  }
+
+  const raw = { leaves: res.leaves || [], holidays: res.holidays || [], myDept: res.myDept || null };
+  teamCache.set(ym, raw);
+  teamRaw = raw;
+  fillDeptOptions(raw.leaves, raw.myDept);
+  paintTeam();
+}
+
 const PANELS = {
   today: 'panel-today',
   records: 'panel-records',
+  team: 'panel-team',
   alerts: 'panel-alerts',
   settings: 'panel-settings',
 };
-const TAB_ORDER = ['today', 'records', 'alerts'];
+const TAB_ORDER = ['today', 'records', 'team', 'alerts'];
 
 function showTab(name) {
   for (const [key, id] of Object.entries(PANELS)) $(id).hidden = key !== name;
@@ -610,13 +1066,96 @@ function setupTabs() {
       showTab(tab.dataset.tab);
       // 오늘 화면을 아직 못 받았어도 기록은 열리게 한다.
       if (tab.dataset.tab === 'records' && viewMonth == null) showMonth(thisMonth);
+      if (tab.dataset.tab === 'team' && teamMonth == null) showTeamMonth(thisMonth);
       if (tab.dataset.tab === 'alerts') loadAlerts();
     });
   }
 }
 
+// ── 만든 사람 ────────────────────────────────────────
+// 사람이 늘면 이 목록에만 추가하면 된다. 같은 role 끼리 묶여서 그려진다.
+const CREDITS = [
+  { name: 'jean.lee', role: 'founder' },
+  { name: 'sammy.kim', role: 'contributor' },
+];
+
+function renderCredits() {
+  const host = $('credit-list');
+  host.innerHTML = '';
+
+  const row = (role, name, cls) => {
+    const box = document.createElement('div');
+    box.className = cls ? `credit-row ${cls}` : 'credit-row';
+
+    const dt = document.createElement('dt');
+    dt.className = 'credit-role';
+    dt.textContent = role;
+
+    const dd = document.createElement('dd');
+    dd.className = 'credit-name';
+    dd.textContent = name;
+
+    box.append(dt, dd);
+    host.appendChild(box);
+  };
+
+  for (const { name, role } of CREDITS) {
+    row(role, name, role === 'founder' ? 'is-founder' : '');
+  }
+  // 다음 사람 자리. 비워 두면 누가 채우고 싶어진다.
+  row('contributor', '?', 'is-open');
+}
+
+// ── 버전 확인 ────────────────────────────────────────
+// 웹스토어 확장이 아니라 크롬이 알아서 갱신해 주지 않는다. 알려만 준다.
+let updateInfo = null;
+
+function renderUpdate(info) {
+  updateInfo = info;
+  const tag = $('ver-tag');
+  const note = $('ver-note');
+  const get = $('ver-get');
+
+  $('ver-now').textContent = `v${info?.current ?? chrome.runtime.getManifest().version}`;
+  tag.hidden = false;
+  tag.className = 'ver-tag';
+  get.hidden = true;
+
+  if (!info?.ok) {
+    tag.classList.add('is-unknown');
+    tag.textContent = '확인 못 함';
+    note.textContent = info?.message
+      ? `최신 버전을 확인하지 못했어요 — ${info.message}`
+      : '최신 버전을 확인하지 못했어요.';
+    return;
+  }
+
+  if (info.behind) {
+    tag.classList.add('is-behind');
+    tag.textContent = `새 버전 v${info.latest}`;
+    note.textContent = '받아서 압축을 푼 뒤, chrome://extensions 에서 이 확장의 새로고침을 누르면 적용돼요.';
+    get.hidden = false;
+    return;
+  }
+
+  tag.classList.add('is-latest');
+  tag.textContent = '최신';
+  const when = info.checkedAt ? new Date(info.checkedAt).toTimeString().slice(0, 5) : null;
+  note.textContent = when ? `최신 버전이에요. ${when} 에 확인했어요.` : '최신 버전이에요.';
+}
+
+async function loadUpdate(force = false) {
+  const btn = $('ver-check');
+  btn.disabled = true;
+  if (force) $('ver-note').textContent = '확인하는 중…';
+  const res = await ask({ type: 'checkUpdate', force });
+  btn.disabled = false;
+  renderUpdate(res && typeof res === 'object' ? res : null);
+}
+
 function toggleHero() {
-  heroView = heroView === 'leave' ? 'shortage' : 'leave';
+  const i = HERO_VIEWS.indexOf(heroView);
+  heroView = HERO_VIEWS[(i + 1) % HERO_VIEWS.length];
   chrome.storage.local.set({ [VIEW_KEY]: heroView });
   if (current) renderHero(current);
 }
@@ -746,7 +1285,13 @@ function renderAlertList(alerts, moreYn) {
         renderCount();
       } else {
         readBtn.disabled = false;
-        readBtn.title = '읽음 처리 실패. 다시 시도';
+        readBtn.title = '다시 시도';
+        // title 은 눈에 띄지 않는다. 왜 안 됐는지 그 자리에 적는다.
+        const why = document.createElement('span');
+        why.className = 'alert-error';
+        why.textContent = res.message || '읽음 처리를 못 했어요.';
+        li.querySelector('.alert-error')?.remove();
+        li.appendChild(why);
       }
     });
 
@@ -873,6 +1418,8 @@ async function saveEmpCode() {
   }
   await ask({ type: 'setIdentity', identity: { empCd: value, coCd: '1000' } });
   monthCache.clear();
+  teamCache.clear();
+  teamMonth = null;
   await load({ force: true });
   runDiagnose();
 }
@@ -912,6 +1459,8 @@ async function refresh() {
   btn.disabled = true;
   label.textContent = '가져오는 중…';
   monthCache.clear();
+  teamCache.clear();
+  teamMonth = null;
   try {
     await Promise.all([load({ force: true }), loadAlerts({ force: true })]);
   } finally {
@@ -921,8 +1470,53 @@ async function refresh() {
 }
 
 setupTabs();
+// 팝업은 포커스를 잃으면 닫힌다. 사이드패널로 옮기면 알림 창을 열어도 그대로 남는다.
+
 $('refresh').addEventListener('click', refresh);
 $('prev-month').addEventListener('click', () => showMonth(shiftMonth(viewMonth, -1)));
+$('team-edit').addEventListener('click', () => {
+  closeScopeMenu();
+  toggleGroupEditor(true);
+});
+$('ge-search').addEventListener('input', renderGroupEditor);
+$('ge-clear').addEventListener('click', () => {
+  teamGroup = [];
+  chrome.storage.local.set({ [GROUP_KEY]: teamGroup });
+  renderGroupEditor();
+});
+document.querySelectorAll('[data-close="group"]').forEach((el) => {
+  el.addEventListener('click', () => closeGroupEditor());
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('group-modal').hidden) closeGroupEditor();
+});
+
+/** 닫으면서 고른 그룹을 화면에 반영한다. */
+function closeGroupEditor() {
+  toggleGroupEditor(false);
+  // 그룹을 만들었으면 바로 그 그룹으로 보여 준다
+  if (teamGroup.length) teamDept = 'group';
+  else if (teamDept === 'group') teamDept = 'all';
+  chrome.storage.local.set({ [DEPT_KEY]: teamDept });
+  teamSelected = null;
+  paintTeam();
+}
+
+$('ge-done').addEventListener('click', () => closeGroupEditor());
+
+$('team-scope').addEventListener('click', toggleScopeMenu);
+// 바깥을 누르면 닫는다
+document.addEventListener('click', (e) => {
+  if (!$('scope-menu').hidden && !e.target.closest('.team-filter')) closeScopeMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('scope-menu').hidden) closeScopeMenu();
+});
+$('team-prev').addEventListener('click', () => showTeamMonth(shiftMonth(teamMonth, -1)));
+$('team-next').addEventListener('click', () => {
+  const next = shiftMonth(teamMonth, 1);
+  if (thisMonth == null || next <= thisMonth) showTeamMonth(next);
+});
 $('next-month').addEventListener('click', () => {
   const next = shiftMonth(viewMonth, 1);
   if (thisMonth == null || next <= thisMonth) showMonth(next);
@@ -931,15 +1525,29 @@ $('hero-toggle').addEventListener('click', toggleHero);
 $('open-gw').addEventListener('click', openGroupware);
 $('notice-action').addEventListener('click', openGroupware);
 $('alert-notice-action').addEventListener('click', openGroupware);
-$('open-settings').addEventListener('click', () =>
-  showTab($('panel-settings').hidden ? 'settings' : 'today')
-);
+renderCredits();
+
+$('ver-check').addEventListener('click', () => loadUpdate(true));
+$('ver-get').addEventListener('click', () => {
+  chrome.tabs.create({ url: updateInfo?.url || 'https://github.com/egg-silver/amaranth-worktime-extension/releases/latest' });
+});
+
+$('open-settings').addEventListener('click', () => {
+  const opening = $('panel-settings').hidden;
+  if (opening) loadUpdate();
+  return showTab(opening ? 'settings' : 'today');
+});
 $('save-settings').addEventListener('click', saveSettings);
 $('diagnose').addEventListener('click', runDiagnose);
 $('save-emp').addEventListener('click', saveEmpCode);
 
+chrome.storage.local.get([DEPT_KEY, GROUP_KEY]).then((stored) => {
+  if (typeof stored[DEPT_KEY] === 'string') teamDept = stored[DEPT_KEY];
+  if (Array.isArray(stored[GROUP_KEY])) teamGroup = stored[GROUP_KEY];
+});
+
 chrome.storage.local.get(VIEW_KEY).then(({ [VIEW_KEY]: saved }) => {
-  if (saved === 'shortage' || saved === 'leave') heroView = saved;
+  if (HERO_VIEWS.includes(saved)) heroView = saved;
   if (current) renderHero(current);
 });
 

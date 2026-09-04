@@ -8,6 +8,7 @@ import {
   shiftMonth,
   expandLeaves,
   buildCalendar,
+  buildTeamCalendar,
   workDayBreakdown,
   estimateLeaveTime,
   lunchDeduction,
@@ -402,4 +403,52 @@ test('시각·시간 포맷', () => {
   assert.equal(formatDuration(500), '8시간 20분');
   assert.equal(formatDuration(480), '8시간');
   assert.equal(formatDuration(20), '20분');
+});
+
+test('팀 근태 달력은 날짜마다 쉬는 사람을 모은다', () => {
+  const leave = (start, end, person, name, isMe) => ({
+    start, end, person, name, dept: '테스트팀', isMe: !!isMe, allDay: true,
+  });
+  const cal = buildTeamCalendar({
+    ym: '202609',
+    leaves: [
+      leave('202609040900', '202609041400', '홍길동', '오전반차'),
+      leave('202609040900', '202609041800', '김철수', '연차'),
+      leave('202609040830', '202609041330', '나', '오전반차', true),
+      leave('202609210900', '202609231800', '이영희', '연차'), // 사흘짜리
+    ],
+    holidays: [{ date: '20260924', name: '추석연휴' }],
+    today: '20260904',
+  });
+
+  const cells = Object.fromEntries(cal.weeks.flat().filter(Boolean).map((c) => [c.date, c]));
+
+  assert.equal(cells['20260904'].count, 3);
+  assert.equal(cells['20260904'].hasMe, true);
+  assert.equal(cells['20260904'].people[0].person, '나', '내 일정이 맨 앞에 온다');
+  assert.equal(cells['20260904'].isToday, true);
+
+  // 여러 날에 걸친 연차는 각 날짜에 하나씩 붙는다
+  for (const d of ['20260921', '20260922', '20260923']) {
+    assert.equal(cells[d].count, 1, `${d} 에 연차가 있어야 한다`);
+    assert.equal(cells[d].people[0].person, '이영희');
+  }
+
+  assert.equal(cells['20260905'].count, 0, '휴가 없는 날');
+  assert.equal(cells['20260924'].isWorkday, false, '공휴일은 근무일이 아니다');
+
+  assert.equal(cal.totals.entries, 4);
+  assert.equal(cal.totals.busiest.date, '20260904');
+  assert.equal(cal.totals.busiest.count, 3);
+  assert.equal(cal.totals.myDays, 1);
+});
+
+test('팀 근태 달력도 요일에 맞춰 칸을 채운다', () => {
+  const cal = buildTeamCalendar({ ym: '202609', leaves: [], holidays: [], today: '20260904' });
+  assert.equal(cal.weeks[0][0], null, '9/1 이 화요일이라 앞이 빈다');
+  assert.equal(cal.weeks[0][2].day, 1);
+  assert.ok(cal.weeks.every((w) => w.length === 7));
+  assert.equal(cal.weeks.flat().filter(Boolean).length, 30);
+  assert.equal(cal.totals.entries, 0);
+  assert.equal(cal.totals.busiest, null, '휴가가 없으면 가장 많은 날도 없다');
 });
