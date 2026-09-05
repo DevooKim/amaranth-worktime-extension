@@ -1058,7 +1058,7 @@ function showTab(name) {
   const settingsBtn = $('open-settings');
   const inSettings = name === 'settings';
   settingsBtn.classList.toggle('is-on', inSettings);
-  settingsBtn.textContent = inSettings ? '설정 닫기' : '설정';
+  $('settings-label').textContent = inSettings ? '설정 닫기' : '설정';
 }
 
 function setupTabs() {
@@ -1186,6 +1186,7 @@ function renderAlertBadge(unread) {
   const badge = $('alert-badge');
   badge.hidden = unread <= 0;
   badge.textContent = unread > 99 ? '99+' : String(unread);
+  $('settings-alert-icon').hidden = unread <= 0;
 }
 
 function renderAlertPoll(lastPoll) {

@@ -322,6 +322,7 @@ main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .foot-actions { display: flex; gap: 2px; }
 .link { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0px 7px; border: 0px; border-radius: var(--r-sm); background: none; font-family: inherit; font-size: var(--font-size-050); font-weight: var(--font-weight-500); color: var(--muted-fg); transition: color var(--t), background var(--t); }
 .link .icon { width: 12px; height: 12px; }
+.settings-alert-icon { color: var(--danger); }
 .link:hover:not(:disabled) { color: var(--fg); background: var(--gray-050); }
 .link.is-on { color: var(--primary-strong); background: var(--primary-soft); }
 .link:disabled { opacity: 0.4; cursor: not-allowed; }
