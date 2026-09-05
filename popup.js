@@ -1527,9 +1527,12 @@ $('notice-action').addEventListener('click', openGroupware);
 $('alert-notice-action').addEventListener('click', openGroupware);
 renderCredits();
 
+$('ver-install').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('update.html') });
+});
 $('ver-check').addEventListener('click', () => loadUpdate(true));
 $('ver-get').addEventListener('click', () => {
-  chrome.tabs.create({ url: updateInfo?.url || 'https://github.com/egg-silver/amaranth-worktime-extension/releases/latest' });
+  chrome.tabs.create({ url: updateInfo?.url || 'https://github.com/DevooKim/amaranth-worktime-extension/releases/latest' });
 });
 
 $('open-settings').addEventListener('click', () => {

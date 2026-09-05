@@ -508,7 +508,7 @@ async function markRead(alertIds) {
 
 // ─── 새 버전 확인 ─────────────────────────────────────────────────────
 // 웹스토어가 아니라 zip 으로 나눠 쓰는 확장이라 크롬이 알아서 갱신해 주지 않는다.
-// 하루 한 번 저장소의 manifest.json 을 보고, 새 버전이면 한 번만 알려 준다.
+// 12시간마다 최신 공개 릴리스를 보고, 새 버전이면 한 번만 알려 준다.
 
 const UPDATE_ALARM = 'check-update';
 const UPDATE_PERIOD_MINUTES = 12 * 60;

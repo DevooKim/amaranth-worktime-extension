@@ -567,3 +567,9 @@ main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .ver-note { margin: var(--size-075) 0 0; font-size: var(--font-size-050); color: var(--faint-fg); line-height: 1.55; }
 .ver-actions { display: flex; gap: var(--size-100); margin-top: var(--size-125); }
 .ver-actions .btn { flex: 1; justify-content: center; }
+
+/* Dedicated updater tab stays open while the popup loses focus. */
+body.update-page { width: auto; min-width: 0; }
+.update-main { max-width: 640px; margin: 40px auto; padding: 24px; }
+.update-main p { margin: 16px 0; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; }
+.update-main .ver-actions, .version .ver-actions { flex-wrap: wrap; }
