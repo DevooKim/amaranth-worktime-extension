@@ -1107,11 +1107,9 @@ function renderCredits() {
 }
 
 // ── 버전 확인 ────────────────────────────────────────
-// 웹스토어 확장이 아니라 크롬이 알아서 갱신해 주지 않는다. 알려만 준다.
-let updateInfo = null;
+// 새 버전 확인 후 사용자 요청으로 저장된 설치 폴더에 적용한다.
 
 function renderUpdate(info) {
-  updateInfo = info;
   const tag = $('ver-tag');
   const note = $('ver-note');
   const get = $('ver-get');
@@ -1133,7 +1131,7 @@ function renderUpdate(info) {
   if (info.behind) {
     tag.classList.add('is-behind');
     tag.textContent = `새 버전 v${info.latest}`;
-    note.textContent = '받아서 압축을 푼 뒤, chrome://extensions 에서 이 확장의 새로고침을 누르면 적용돼요.';
+    note.textContent = '업데이트를 누르면 저장된 설치 폴더에 적용하고 자동으로 다시 로드합니다. 폴더가 없으면 먼저 지정합니다.';
     get.hidden = false;
     return;
   }
@@ -1527,12 +1525,12 @@ $('notice-action').addEventListener('click', openGroupware);
 $('alert-notice-action').addEventListener('click', openGroupware);
 renderCredits();
 
-$('ver-install').addEventListener('click', () => {
+$('ver-folder').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('update.html') });
 });
 $('ver-check').addEventListener('click', () => loadUpdate(true));
 $('ver-get').addEventListener('click', () => {
-  chrome.tabs.create({ url: updateInfo?.url || 'https://github.com/DevooKim/amaranth-worktime-extension/releases/latest' });
+  chrome.tabs.create({ url: chrome.runtime.getURL('update.html?action=install') });
 });
 
 $('open-settings').addEventListener('click', () => {

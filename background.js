@@ -562,7 +562,7 @@ async function notifyUpdate(latest) {
     type: 'basic',
     iconUrl: 'icons/icon128.png',
     title: `새 버전 ${latest} 이 나왔어요`,
-    message: '눌러서 받으러 가기. 받은 뒤 확장 프로그램 페이지에서 새로고침하면 끝이에요.',
+    message: '눌러서 업데이트. 설치 폴더에 적용한 뒤 자동으로 다시 로드합니다.',
     contextMessage: `지금 쓰는 버전 ${currentVersion()}`,
     requireInteraction: true,
   });
@@ -576,7 +576,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
   if (notificationId === UPDATE_NOTI_ID) {
-    chrome.tabs.create({ url: RELEASES_URL });
+    chrome.tabs.create({ url: chrome.runtime.getURL('update.html?action=install') });
     chrome.notifications.clear(notificationId);
     return;
   }
