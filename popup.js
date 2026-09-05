@@ -14,6 +14,7 @@ import {
   LUNCH_END,
 } from './lib/calc.js';
 import { isUnread, countUnread, parseCreateDate, alertTitle } from './lib/alerts.js';
+import { savedFolder } from './lib/folder-update.js';
 
 const GW_URL = 'https://gw.goorm.io/#/';
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -1528,6 +1529,9 @@ renderCredits();
 $('ver-folder').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('update.html') });
 });
+savedFolder()
+  .then((handle) => { $('ver-folder-check').hidden = !handle; })
+  .catch(() => { $('ver-folder-check').hidden = true; });
 $('ver-check').addEventListener('click', () => loadUpdate(true));
 $('ver-get').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('update.html?action=install') });

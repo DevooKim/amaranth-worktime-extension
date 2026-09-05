@@ -17,7 +17,7 @@ function controls(value) {
 function showFolder() {
   folder.textContent = directory ? `저장된 폴더: ${directory.name}` : '선택한 폴더가 없어요.';
 }
-document.getElementById('title').textContent = updating ? '확장 업데이트' : '업데이트 폴더 설정';
+document.getElementById('title').textContent = updating ? '확장 업데이트' : '폴더 설정';
 document.title = updating ? 'gw-worktime 업데이트' : 'gw-worktime 폴더 설정';
 document.getElementById('hint').textContent = updating
   ? '선택한 설치 폴더에 새 버전을 다운로드하고 적용한 뒤 자동으로 다시 로드합니다. 작업 중에는 이 탭과 브라우저를 닫지 마세요.'

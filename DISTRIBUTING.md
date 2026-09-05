@@ -15,10 +15,10 @@
 npm run package
 ```
 
-`dist/gw-worktime-v<manifest 버전>.zip`을 생성한다. 압축을 풀면 루트에 `manifest.json`이 나온다.
+`dist/gw-worktime.zip`을 생성한다. 압축을 풀면 `gw-worktime` 폴더가 생기고 루트에 `manifest.json`이 나온다.
 확장 실행에 필요한 루트 파일과 `lib/`, `fonts/`, `icons/`만 포함한다.
 문서, 테스트, 개발 도구, Git 정보, `package.json`은 제외한다.
-업데이터와 패키징 명령은 같은 파일 허용 목록을 사용한다.
+업데이터와 패키징 명령은 같은 파일 허용 목록을 사용한다. ZIP 이름에 버전을 넣지 않아 압축을 풀 때 폴더 이름이 버전별로 바뀌지 않는다.
 
 ## 개인 정보
 

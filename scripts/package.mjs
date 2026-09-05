@@ -22,7 +22,8 @@ await collect();
 const outputDir = resolve(root, 'dist');
 await mkdir(outputDir, { recursive: true });
 const temporary = await mkdtemp(join(tmpdir(), 'gw-worktime-package-'));
-const output = join(outputDir, `gw-worktime-v${manifest.version}.zip`);
+// Keep the unpacked folder name stable when a file manager expands the ZIP.
+const output = join(outputDir, 'gw-worktime.zip');
 try {
   const archive = join(temporary, 'extension.zip');
   const result = spawnSync('zip', ['-q', '-X', archive, '-@'], {
