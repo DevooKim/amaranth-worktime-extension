@@ -23,7 +23,7 @@ const outputDir = resolve(root, 'dist');
 await mkdir(outputDir, { recursive: true });
 const temporary = await mkdtemp(join(tmpdir(), 'gw-worktime-package-'));
 // Keep the unpacked folder name stable when a file manager expands the ZIP.
-const output = join(outputDir, 'gw-worktime.zip');
+const output = join(outputDir, 'amaranth-worktime-extension.zip');
 try {
   const archive = join(temporary, 'extension.zip');
   const result = spawnSync('zip', ['-q', '-X', archive, '-@'], {
