@@ -2,4 +2,3 @@
 .superpowers/
 node_modules/
 .claude/skills/
-dist/
