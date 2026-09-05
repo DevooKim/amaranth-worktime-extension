@@ -19,7 +19,7 @@ test('알아볼 수 없는 값이 와도 터지지 않는다', () => {
 
 test('최신 공개 릴리스 태그를 확인한다', async () => {
   assert.equal(await fetchLatestVersion(async url => {
-    assert.equal(url, 'https://api.github.com/repos/DevooKim/amaranth-worktime-extension/releases/latest');
+    assert.equal(url, 'https://api.github.com/repos/egg-silver/amaranth-worktime-extension/releases/latest');
     return Response.json({ tag_name: 'v1.2.0' });
   }), '1.2.0');
   await assert.rejects(fetchLatestVersion(async () => Response.json({ tag_name: 'v1.2.0-beta' })), /버전 형식/);

@@ -13,8 +13,8 @@
   ],
   "host_permissions": [
     "https://gw.goorm.io/*",
-    "https://api.github.com/repos/DevooKim/amaranth-worktime-extension/*",
-    "https://raw.githubusercontent.com/DevooKim/amaranth-worktime-extension/*"
+    "https://api.github.com/repos/egg-silver/amaranth-worktime-extension/*",
+    "https://raw.githubusercontent.com/egg-silver/amaranth-worktime-extension/*"
   ],
   "side_panel": {
     "default_path": "popup.html"
