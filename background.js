@@ -14,8 +14,10 @@ import {
   fetchTeamAttendance,
   markAlertsRead,
   markAllAlertsRead,
+  postAttend,
   AuthError,
 } from "./lib/api.js";
+import { applyAnnualLeave } from "./lib/leave.js";
 import {
   alertIdentity,
   alertTitle,
@@ -128,9 +130,10 @@ function withTodayCommute(rows, today, commute, dailyMinutes, nowMin) {
   const come = hhmm(commute?.comeTm);
   if (!come) return rows; // 그 날 출근 기록이 없으면 그대로.
   const leave = hhmm(commute?.leaveTm);
-  const toMin = (t) => (t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(2)) : null);
+  const toMin = (t) =>
+    t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(2)) : null;
   const c = toMin(come);
-  const l = leave ? toMin(leave) : nowMin != null ? nowMin : null;
+  const l = leave ? toMin(leave) : nowMin == null ? null : nowMin;
 
   const out = rows.map((r) => ({ ...r }));
   const idx = out.findIndex((r) => r.atDt === today);
@@ -192,7 +195,13 @@ async function fillRecentCommute(
   );
   let out = rows;
   for (const [ymd, commute] of commutes) {
-    out = withTodayCommute(out, ymd, commute, dailyMinutes, ymd === today ? nowMin : null);
+    out = withTodayCommute(
+      out,
+      ymd,
+      commute,
+      dailyMinutes,
+      ymd === today ? nowMin : null,
+    );
   }
   return out;
 }
@@ -616,6 +625,27 @@ async function handleGetRecords({ month }) {
   } catch (err) {
     return failure(err, null);
   }
+}
+
+/** 연차 신청서를 만들고 그룹웨어 상신 화면을 연다. */
+async function handleApplyLeave({ kind, startDt, endDt, startTm, endTm }) {
+  const identity = await getIdentity();
+  if (!identity?.empCd) {
+    return {
+      ok: false,
+      reason: "no-identity",
+      message: "사번을 아직 못 읽었어요.",
+    };
+  }
+  const credentials = await readCredentials();
+  const result = await applyAnnualLeave(
+    (pathname, body) => postAttend(pathname, body, credentials),
+    { identity, kind, startDt, endDt, startTm, endTm },
+  );
+  if (result?.url) chrome.tabs.create({ url: result.url });
+  const ym = formatDate(new Date()).slice(0, 6);
+  await chrome.storage.local.remove([`leaves:${ym}`, RESULT_KEY]);
+  return { ok: true, ...result };
 }
 
 // ─── 알림 ─────────────────────────────────────────────────────────────
@@ -1164,6 +1194,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }),
       )
       .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message?.type === "applyLeave") {
+    handleApplyLeave(message)
+      .then(sendResponse)
+      .catch((err) => sendResponse(failure(err, null)));
     return true;
   }
   if (message?.type === "setSettings") {
