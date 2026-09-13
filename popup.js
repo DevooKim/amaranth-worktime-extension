@@ -11,6 +11,8 @@ import {
   buildTeamCalendar,
   shiftMonth,
   formatDate,
+  expandLeaves,
+  isHalfLeaveName,
   weekHasSmartDay,
   STANDARD_MINUTES,
 } from "./lib/calc.js";
@@ -318,7 +320,13 @@ function renderLeaves(leaves = []) {
 
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = fullLeaveName(leave.name);
+    name.textContent =
+      fullLeaveName(leave.name) +
+      (leave.pending
+        ? leave.nextEmpNm
+          ? ` · 결재중 (${leave.nextEmpNm})`
+          : " · 결재중"
+        : "");
 
     li.append(day, name);
     list.appendChild(li);
@@ -436,7 +444,13 @@ function renderAnnualLeave(annual) {
 function calCellLabel(cell) {
   const parts = [labelDate(cell.date)];
   if (cell.holidayName) parts.push(cell.holidayName);
-  if (cell.leaveName) parts.push(cell.leaveName);
+  if (cell.leaveName) {
+    parts.push(cell.leaveName);
+    if (cell.pending)
+      parts.push(
+        cell.nextEmpNm ? `결재 진행 (${cell.nextEmpNm})` : "결재 진행",
+      );
+  }
   if (cell.missingLeave) parts.push("퇴근 미등록");
   else if (cell.worked > 0) parts.push(`${formatDuration(cell.worked)} 근무`);
   return parts.join(", ");
@@ -465,7 +479,15 @@ function renderDayDetail(cell) {
     box.appendChild(row);
   };
 
-  if (cell.leaveName) add(cell.leaveName, "d-leave");
+  if (cell.leaveName) {
+    let label = cell.leaveName;
+    if (cell.pending) {
+      label += cell.nextEmpNm
+        ? ` · 결재 진행 (${cell.nextEmpNm})`
+        : " · 결재 진행";
+    }
+    add(label, "d-leave");
+  }
   if (cell.missingLeave) add(`출근 ${formatClock(cell.come)} → 퇴근 미등록`);
   else if (cell.come != null && cell.leaveAt != null) {
     add(`${formatClock(cell.come)} → ${formatClock(cell.leaveAt)}`);
@@ -519,6 +541,7 @@ function renderCalendar(calendar) {
       if (cell.missingLeave) classes.push("missing");
       else if (cell.leaveName) {
         classes.push("has-leave");
+        if (cell.pending) classes.push("is-pending");
         // 종일이면 꽉 채우고, 반차는 쉬는 시간대 쪽을 채운다 — 오전 반차면 위, 오후면 아래.
         const half = cell.leaveName.includes("반반차")
           ? "quarter"
@@ -533,7 +556,13 @@ function renderCalendar(calendar) {
         classes.push(heatLevel(cell.worked, cell.standard));
 
       el.className = classes.join(" ");
-      el.title = [cell.holidayName, cell.leaveName].filter(Boolean).join(" · ");
+      el.title = [
+        cell.holidayName,
+        cell.leaveName,
+        cell.pending ? "결재 진행" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
 
       const num = document.createElement("span");
       num.className = "num";
@@ -634,7 +663,7 @@ function icon(name) {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // background.js 의 BUILD 와 같은 값이어야 한다. 파일을 고칠 때 함께 올린다.
-const EXPECTED_BUILD = 30;
+const EXPECTED_BUILD = 31;
 const STALE_WORKER_MESSAGE =
   "확장을 새로고침해 주세요. chrome://extensions 에서 gw-worktime 카드의 ↻ 를 누르면 됩니다. " +
   "(팝업은 최신인데 백그라운드가 예전 버전으로 남아 있어요)";
@@ -2324,8 +2353,19 @@ function setupLeaveApply() {
     return map;
   };
 
-  const ensureHolidays = async (ym) => {
-    if (holidayMap(ym).size) return;
+  const leaveMap = (ym) => {
+    const map = new Map();
+    const leaves = monthCache.get(ym)?.leaves || [];
+    for (const [date, items] of expandLeaves(leaves)) {
+      if (date.slice(0, 6) !== ym || !items.length) continue;
+      map.set(date, items[0]);
+    }
+    return map;
+  };
+
+  const ensureMonth = async (ym) => {
+    const cached = monthCache.get(ym);
+    if (cached?.calendar && Array.isArray(cached.leaves)) return;
     const res = await ask({ type: "getRecords", month: ym });
     if (!res?.ok) return;
     monthCache.set(ym, {
@@ -2345,6 +2385,7 @@ function setupLeaveApply() {
     const lastDate = new Date(y, m, 0).getDate();
     const pad = first.getDay();
     const hols = holidayMap(viewYm);
+    const leaves = leaveMap(viewYm);
     const addEmpty = () => {
       const el = document.createElement("span");
       el.className = "la-cal-cell empty";
@@ -2363,41 +2404,66 @@ function setupLeaveApply() {
       if (dow === 6) btn.classList.add("sat");
       if (day === today) btn.classList.add("today");
       const holi = hols.get(day);
+      const leave = leaves.get(day);
       if (holi) {
         btn.classList.add("holi");
         btn.title = holi;
+      }
+      if (leave) {
+        btn.classList.add("busy");
+        if (leave.pending) btn.classList.add("pending");
+        const who = leave.nextEmpNm ? ` (${leave.nextEmpNm})` : "";
+        btn.title = leave.pending
+          ? `${leave.name} · 결재 진행${who}`
+          : leave.name;
       }
       const n = document.createElement("span");
       n.className = "n";
       n.textContent = String(d);
       btn.appendChild(n);
-      if (holi) {
+      if (leave) {
+        const tag = document.createElement("span");
+        tag.className = "lv";
+        tag.textContent = leave.pending ? "결재중" : shortLeaveName(leave.name);
+        btn.appendChild(tag);
+      } else if (holi) {
         const tag = document.createElement("span");
         tag.className = "h";
         tag.textContent = shortHolidayName(holi);
         btn.appendChild(tag);
       }
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        range = pickDateRange(range, day);
-        hoverDay = null;
-        markCells();
-        if (!range.anchor) {
-          picked = true;
-          setCalOpen(false);
-        }
-      });
-      btn.addEventListener("pointerenter", () => {
-        if (!range.anchor) return;
-        hoverDay = day;
-        markCells();
-      });
+      const blocked =
+        dow === 0 ||
+        dow === 6 ||
+        !!holi ||
+        !!leave?.pending ||
+        !!(leave && !isHalfLeaveName(leave.name));
+      if (blocked) {
+        btn.disabled = true;
+        btn.classList.add("disabled");
+      } else {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          range = pickDateRange(range, day);
+          hoverDay = null;
+          markCells();
+          if (!range.anchor) {
+            picked = true;
+            setCalOpen(false);
+          }
+        });
+        btn.addEventListener("pointerenter", () => {
+          if (!range.anchor) return;
+          hoverDay = day;
+          markCells();
+        });
+      }
       grid.appendChild(btn);
     }
     const trail = (7 - ((pad + lastDate) % 7)) % 7;
     for (let i = 0; i < trail; i++) addEmpty();
     markCells();
-    ensureHolidays(viewYm);
+    ensureMonth(viewYm);
   };
 
   const scrollMainTo = (el) => {

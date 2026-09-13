@@ -732,6 +732,9 @@ main {
  background: var(--orange-100);
  border-color: var(--orange-200);
 }
+.cal-cell.has-leave.is-pending {
+ box-shadow: inset 0 0 0 1.5px var(--orange-500);
+}
 .cal-cell.leave-half-pm {
  background: linear-gradient(
   to top,
@@ -2794,15 +2797,31 @@ button.crew-date::after {
  justify-content: center;
  flex: none;
 }
-.la-cal-cell .h {
+.la-cal-cell .h,
+.la-cal-cell .lv {
  max-width: 100%;
  font-size: 9px;
  font-weight: var(--font-weight-500);
  line-height: 1;
- color: var(--red-500);
  white-space: nowrap;
  overflow: hidden;
  text-overflow: ellipsis;
+}
+.la-cal-cell .h {
+ color: var(--red-500);
+}
+.la-cal-cell .lv {
+ color: var(--orange-600);
+}
+.la-cal-cell.pending .lv {
+ font-weight: var(--font-weight-700);
+}
+.la-cal-cell:disabled {
+ cursor: default;
+ opacity: 0.45;
+}
+.la-cal-cell:disabled:hover .n {
+ background: none;
 }
 .la-cal-cell.in {
  background: var(--blue-050);

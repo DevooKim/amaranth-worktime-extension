@@ -13,6 +13,9 @@ const {
   isWeekend,
   holidaySetFromList,
   workingDaySegments,
+  parsePendingCalendarRows,
+  parsePendingApplications,
+  mergeLeaves,
   collectValidationProblems,
   formatValidationMessage,
   resolveEmployee,
@@ -73,6 +76,70 @@ test("공휴일·주말이 끼면 연속 근무일 구간으로 나눈다", () =
     { start: "20260810", end: "20260811", days: 2 },
     { start: "20260813", end: "20260813", days: 1 },
   ]);
+});
+
+test("결재 진행 중인 신청만 휴가 목록으로 뽑는다", () => {
+  const pending = parsePendingCalendarRows([
+    {
+      approState: "0",
+      appSq: "625",
+      atDt: "20260921",
+      atCdNm: "리프레시휴가",
+      atCd: "1016",
+      nextEmpNm: "한민웅",
+    },
+    {
+      approState: "0",
+      appSq: "625",
+      atDt: "20260922",
+      atCdNm: "리프레시휴가",
+      atCd: "1016",
+      nextEmpNm: "한민웅",
+    },
+    {
+      approState: "1",
+      appSq: "100",
+      atDt: "20260923",
+      atCdNm: "연차",
+      atCd: "1101",
+    },
+  ]);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].pending, true);
+  assert.equal(pending[0].name, "리프레시휴가");
+  assert.deepEqual(pending[0].dates, ["20260921", "20260922"]);
+  assert.equal(pending[0].nextEmpNm, "한민웅");
+  const merged = mergeLeaves(
+    [{ start: "20260910", end: "20260910", name: "연차" }],
+    pending,
+  );
+  assert.equal(merged.length, 2);
+  const wrapped = parsePendingCalendarRows({
+    resultData: [
+      {
+        approState: "0",
+        appSq: "1",
+        atDt: "20260921",
+        atCdNm: "연차",
+      },
+    ],
+  });
+  assert.equal(wrapped[0].name, "연차");
+  const personal = parsePendingApplications({
+    atPopUpDetailInfos: [
+      {
+        attendApplications: [
+          {
+            approState: "0",
+            startDt: "20260921",
+            endDt: "20260921",
+            atNm: "복지휴가",
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(personal[0].name, "복지휴가");
 });
 
 test("검증 실패 배열을 사람 말로 바꾼다", () => {

@@ -5,7 +5,7 @@ import {
   fetchTodayCommute,
   fetchWorkRows,
   fetchHolidays,
-  fetchLeaves,
+  fetchLeavesWithPending,
   fetchTeamLeaves,
   fetchAnnualLeave,
   fetchAlerts,
@@ -37,6 +37,7 @@ import {
   parseDate,
   parseExceptWorkMinutes,
   workedMinutes,
+  fullDayLeaveDates,
   buildCalendar,
   buildTeamCalendar,
   attachCrewLeaves,
@@ -85,7 +86,7 @@ async function fetchMonth(credentials, identity, ym) {
   const keys = {
     rows: `rows:${ym}`,
     holidays: `holidays:${ym}`,
-    leaves: `leaves:${ym}`,
+    leaves: `leaves:v2:${ym}`,
   };
 
   const [cachedRows, cachedHolidays, cachedLeaves] = await Promise.all([
@@ -106,7 +107,10 @@ async function fetchMonth(credentials, identity, ym) {
       fetchHolidays(credentials, { coCd: identity.coCd, from, to }),
     // 휴가 조회는 부가 기능이다. 실패해도 나머지 화면은 살아 있어야 한다.
     cachedLeaves ??
-      fetchLeaves(credentials, identity, { from, to }).catch(() => []),
+      fetchLeavesWithPending(credentials, identity, {
+        from: monthRange(shiftMonth(ym, -1)).from,
+        to: monthRange(shiftMonth(ym, 1)).to,
+      }).catch(() => []),
   ]);
 
   if (!cachedRows) await writeCache(keys.rows, rows || []);
@@ -161,9 +165,12 @@ function withTodayCommute(rows, today, commute, dailyMinutes, nowMin) {
  */
 async function fillRecentCommute(
   rows,
-  { credentials, identity, dailyMinutes, today, nowMin, holidays },
+  { credentials, identity, dailyMinutes, today, nowMin, holidays, leaves },
 ) {
-  const holidaySet = new Set((holidays || []).map((h) => h.date));
+  const holidaySet = new Set([
+    ...(holidays || []).map((h) => h.date),
+    ...fullDayLeaveDates(leaves),
+  ]);
   const byDate = new Map(rows.map((r) => [r.atDt, r]));
   const p = (n) => String(n).padStart(2, "0");
   const base = parseDate(today);
@@ -242,6 +249,7 @@ async function loadStatus() {
   const status = computeStatus({
     rows: month.rows,
     holidays: month.holidays,
+    leaves: month.leaves,
     today,
     nowMin: now.getHours() * 60 + now.getMinutes(),
     comeTm: commute?.comeTm || "",
@@ -266,6 +274,7 @@ async function loadStatus() {
     today,
     nowMin,
     holidays: month.holidays,
+    leaves: month.leaves,
   });
 
   return {
@@ -327,6 +336,7 @@ async function loadRecords(ym) {
       today,
       nowMin,
       holidays: month.holidays,
+      leaves: month.leaves,
     });
   }
 
@@ -587,7 +597,7 @@ async function diagnose() {
   });
 
   await record("휴가 일정", async () => {
-    const l = await fetchLeaves(credentials, identity, {
+    const l = await fetchLeavesWithPending(credentials, identity, {
       from: prev.from,
       to: prev.to,
     });
@@ -604,7 +614,7 @@ async function handleGetStatus({ force } = {}) {
       await chrome.storage.local.remove([
         `rows:${ym}`,
         `holidays:${ym}`,
-        `leaves:${ym}`,
+        `leaves:v2:${ym}`,
         `team:${ym}`,
       ]);
     }
@@ -644,7 +654,7 @@ async function handleApplyLeave({ kind, startDt, endDt, startTm, endTm }) {
   );
   if (result?.url) chrome.tabs.create({ url: result.url });
   const ym = formatDate(new Date()).slice(0, 6);
-  await chrome.storage.local.remove([`leaves:${ym}`, RESULT_KEY]);
+  await chrome.storage.local.remove([`leaves:v2:${ym}`, RESULT_KEY]);
   return { ok: true, ...result };
 }
 
@@ -1082,7 +1092,7 @@ ensureUpdateAlarm();
 // 팝업이 "지금 돌고 있는 서비스 워커가 최신인지" 확인하는 용도.
 // 팝업 파일은 열 때마다 다시 읽히지만 서비스 워커는 확장을 새로고침해야 바뀌기 때문에,
 // 이 응답이 없으면 예전 워커가 남아 있다는 뜻이다.
-const BUILD = 30;
+const BUILD = 31;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "ping") {
