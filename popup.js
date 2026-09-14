@@ -10,9 +10,18 @@ import {
   normalizeStatus,
   buildTeamCalendar,
   shiftMonth,
+  formatDate,
+  expandLeaves,
+  isHalfLeaveName,
   weekHasSmartDay,
   STANDARD_MINUTES,
 } from "./lib/calc.js";
+import {
+  LEAVE_KINDS,
+  pickDateRange,
+  previewDateRange,
+  toHhmm,
+} from "./lib/leave.js";
 import {
   isUnread,
   countUnread,
@@ -36,8 +45,8 @@ const INCLUDE_TODAY_KEY = "includeToday";
 
 const $ = (id) => document.getElementById(id);
 
-let current = null; // 마지막으로 렌더한 status
-let currentFetchedAt = null;
+const current = null; // 마지막으로 렌더한 status
+const currentFetchedAt = null;
 let heroView = "today";
 let includeToday = true; // 오늘 근무 시간을 이번 달 계산에 포함할지
 let tickTimer = null;
@@ -311,7 +320,13 @@ function renderLeaves(leaves = []) {
 
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = fullLeaveName(leave.name);
+    name.textContent =
+      fullLeaveName(leave.name) +
+      (leave.pending
+        ? leave.nextEmpNm
+          ? ` · 결재중 (${leave.nextEmpNm})`
+          : " · 결재중"
+        : "");
 
     li.append(day, name);
     list.appendChild(li);
@@ -429,7 +444,13 @@ function renderAnnualLeave(annual) {
 function calCellLabel(cell) {
   const parts = [labelDate(cell.date)];
   if (cell.holidayName) parts.push(cell.holidayName);
-  if (cell.leaveName) parts.push(cell.leaveName);
+  if (cell.leaveName) {
+    parts.push(cell.leaveName);
+    if (cell.pending)
+      parts.push(
+        cell.nextEmpNm ? `결재 진행 (${cell.nextEmpNm})` : "결재 진행",
+      );
+  }
   if (cell.missingLeave) parts.push("퇴근 미등록");
   else if (cell.worked > 0) parts.push(`${formatDuration(cell.worked)} 근무`);
   return parts.join(", ");
@@ -458,7 +479,15 @@ function renderDayDetail(cell) {
     box.appendChild(row);
   };
 
-  if (cell.leaveName) add(cell.leaveName, "d-leave");
+  if (cell.leaveName) {
+    let label = cell.leaveName;
+    if (cell.pending) {
+      label += cell.nextEmpNm
+        ? ` · 결재 진행 (${cell.nextEmpNm})`
+        : " · 결재 진행";
+    }
+    add(label, "d-leave");
+  }
   if (cell.missingLeave) add(`출근 ${formatClock(cell.come)} → 퇴근 미등록`);
   else if (cell.come != null && cell.leaveAt != null) {
     add(`${formatClock(cell.come)} → ${formatClock(cell.leaveAt)}`);
@@ -512,6 +541,7 @@ function renderCalendar(calendar) {
       if (cell.missingLeave) classes.push("missing");
       else if (cell.leaveName) {
         classes.push("has-leave");
+        if (cell.pending) classes.push("is-pending");
         // 종일이면 꽉 채우고, 반차는 쉬는 시간대 쪽을 채운다 — 오전 반차면 위, 오후면 아래.
         const half = cell.leaveName.includes("반반차")
           ? "quarter"
@@ -526,7 +556,13 @@ function renderCalendar(calendar) {
         classes.push(heatLevel(cell.worked, cell.standard));
 
       el.className = classes.join(" ");
-      el.title = [cell.holidayName, cell.leaveName].filter(Boolean).join(" · ");
+      el.title = [
+        cell.holidayName,
+        cell.leaveName,
+        cell.pending ? "결재 진행" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
 
       const num = document.createElement("span");
       num.className = "num";
@@ -545,7 +581,9 @@ function renderCalendar(calendar) {
       if (cell.missingLeave || cell.worked > 0) {
         const hours = document.createElement("span");
         hours.className = "hours";
-        hours.textContent = cell.missingLeave ? "미등록" : shortHours(cell.worked);
+        hours.textContent = cell.missingLeave
+          ? "미등록"
+          : shortHours(cell.worked);
         el.appendChild(hours);
       }
 
@@ -625,7 +663,7 @@ function icon(name) {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // background.js 의 BUILD 와 같은 값이어야 한다. 파일을 고칠 때 함께 올린다.
-const EXPECTED_BUILD = 30;
+const EXPECTED_BUILD = 31;
 const STALE_WORKER_MESSAGE =
   "확장을 새로고침해 주세요. chrome://extensions 에서 gw-worktime 카드의 ↻ 를 누르면 됩니다. " +
   "(팝업은 최신인데 백그라운드가 예전 버전으로 남아 있어요)";
@@ -2210,6 +2248,306 @@ $("crew-add-code").addEventListener("click", () => {
   renderCrewReg();
   crewMsg(n ? `${n}명 추가했어요.` : "이미 등록된 사람이에요.", n > 0);
 });
+
+function setupLeaveApply() {
+  const today = formatDate(new Date());
+  const HOURS = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, "0"),
+  );
+  const MINS = ["00", "10", "20", "30", "40", "50"];
+  let kind = "연차";
+  let range = { start: today, end: today, anchor: null };
+  let hoverDay = null;
+  let viewYm = today.slice(0, 6);
+  let picked = false;
+
+  const fillSelect = (el, values) => {
+    el.replaceChildren();
+    for (const v of values) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      el.appendChild(opt);
+    }
+  };
+  fillSelect($("la-start-h"), HOURS);
+  fillSelect($("la-end-h"), HOURS);
+  fillSelect($("la-start-m"), MINS);
+  fillSelect($("la-end-m"), MINS);
+
+  const snapMin = (mm) => {
+    const n = Math.round(Number(mm) / 10) * 10;
+    return String(n === 60 ? 50 : n).padStart(2, "0");
+  };
+  const setClock = (which, hhmm) => {
+    const t = toHhmm(hhmm) || "0000";
+    $(`la-${which}-h`).value = t.slice(0, 2);
+    $(`la-${which}-m`).value = snapMin(t.slice(2, 4));
+  };
+  const getClock = (which) =>
+    `${$(`la-${which}-h`).value}${$(`la-${which}-m`).value}`;
+
+  const shown = () => previewDateRange(range, hoverDay);
+  const rangeText = (start, end) => {
+    if (start === end) {
+      return start === today ? "오늘" : labelDate(start);
+    }
+    return `${shortDate(start)} ~ ${shortDate(end)}`;
+  };
+
+  const markCells = () => {
+    const { start, end } = shown();
+    $("la-dates-v").textContent = rangeText(start, end);
+    $("la-cal-hint").textContent = range.anchor
+      ? "종료일을 눌러 주세요"
+      : "시작일과 종료일을 차례로 눌러 주세요";
+    for (const btn of $("la-cal-grid").querySelectorAll("[data-ymd]")) {
+      const day = btn.dataset.ymd;
+      btn.classList.toggle("in", day >= start && day <= end);
+      btn.classList.toggle("start", day === start);
+      btn.classList.toggle("end", day === end);
+      btn.classList.toggle("edge", day === start || day === end);
+    }
+  };
+
+  const setKind = (next) => {
+    kind = next;
+    const def = LEAVE_KINDS[kind];
+    if (def) {
+      setClock("start", def.startTm);
+      setClock("end", def.endTm);
+    }
+    for (const btn of $("la-kinds").querySelectorAll(".la-kind")) {
+      const on = btn.dataset.kind === kind;
+      btn.classList.toggle("is-on", on);
+      btn.setAttribute("aria-pressed", String(on));
+    }
+    $("la-times").hidden = kind === "연차";
+  };
+
+  const syncUi = () => {
+    const multi = range.start !== range.end;
+    if (multi) setKind("연차");
+    $("la-kinds").hidden = !picked || multi;
+    $("la-kind-fixed").hidden = !picked || !multi;
+    $("la-times").hidden = kind === "연차";
+  };
+
+  const holidayMap = (ym) => {
+    const map = new Map();
+    const weeks = monthCache.get(ym)?.calendar?.weeks;
+    if (weeks) {
+      for (const week of weeks) {
+        for (const cell of week || []) {
+          if (cell?.date && cell.holidayName) {
+            map.set(cell.date.slice(0, 8), cell.holidayName);
+          }
+        }
+      }
+    }
+    for (const h of teamCache.get(ym)?.holidays || []) {
+      const date = typeof h === "string" ? h : h.date;
+      if (!date || map.has(date)) continue;
+      map.set(String(date).slice(0, 8), h.name || "공휴일");
+    }
+    return map;
+  };
+
+  const leaveMap = (ym) => {
+    const map = new Map();
+    const leaves = monthCache.get(ym)?.leaves || [];
+    for (const [date, items] of expandLeaves(leaves)) {
+      if (date.slice(0, 6) !== ym || !items.length) continue;
+      map.set(date, items[0]);
+    }
+    return map;
+  };
+
+  const ensureMonth = async (ym) => {
+    const cached = monthCache.get(ym);
+    if (cached?.calendar && Array.isArray(cached.leaves)) return;
+    const res = await ask({ type: "getRecords", month: ym });
+    if (!res?.ok) return;
+    monthCache.set(ym, {
+      calendar: res.calendar,
+      leaves: res.leaves || [],
+    });
+    if (viewYm === ym && !$("la-cal").hidden) paintCal();
+  };
+
+  const paintCal = () => {
+    const y = +viewYm.slice(0, 4);
+    const m = +viewYm.slice(4, 6);
+    $("la-cal-title").textContent = `${y}년 ${m}월`;
+    const grid = $("la-cal-grid");
+    grid.replaceChildren();
+    const first = new Date(y, m - 1, 1);
+    const lastDate = new Date(y, m, 0).getDate();
+    const pad = first.getDay();
+    const hols = holidayMap(viewYm);
+    const leaves = leaveMap(viewYm);
+    const addEmpty = () => {
+      const el = document.createElement("span");
+      el.className = "la-cal-cell empty";
+      grid.appendChild(el);
+    };
+    for (let i = 0; i < pad; i++) addEmpty();
+    const p = (n) => String(n).padStart(2, "0");
+    for (let d = 1; d <= lastDate; d++) {
+      const day = `${y}${p(m)}${p(d)}`;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "la-cal-cell";
+      btn.dataset.ymd = day;
+      const dow = (pad + d - 1) % 7;
+      if (dow === 0) btn.classList.add("sun");
+      if (dow === 6) btn.classList.add("sat");
+      if (day === today) btn.classList.add("today");
+      const holi = hols.get(day);
+      const leave = leaves.get(day);
+      if (holi) {
+        btn.classList.add("holi");
+        btn.title = holi;
+      }
+      if (leave) {
+        btn.classList.add("busy");
+        if (leave.pending) btn.classList.add("pending");
+        const who = leave.nextEmpNm ? ` (${leave.nextEmpNm})` : "";
+        btn.title = leave.pending
+          ? `${leave.name} · 결재 진행${who}`
+          : leave.name;
+      }
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = String(d);
+      btn.appendChild(n);
+      if (leave) {
+        const tag = document.createElement("span");
+        tag.className = "lv";
+        tag.textContent = leave.pending ? "결재중" : shortLeaveName(leave.name);
+        btn.appendChild(tag);
+      } else if (holi) {
+        const tag = document.createElement("span");
+        tag.className = "h";
+        tag.textContent = shortHolidayName(holi);
+        btn.appendChild(tag);
+      }
+      const blocked =
+        dow === 0 ||
+        dow === 6 ||
+        !!holi ||
+        !!leave?.pending ||
+        !!(leave && !isHalfLeaveName(leave.name));
+      if (blocked) {
+        btn.disabled = true;
+        btn.classList.add("disabled");
+      } else {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          range = pickDateRange(range, day);
+          hoverDay = null;
+          markCells();
+          if (!range.anchor) {
+            picked = true;
+            setCalOpen(false);
+          }
+        });
+        btn.addEventListener("pointerenter", () => {
+          if (!range.anchor) return;
+          hoverDay = day;
+          markCells();
+        });
+      }
+      grid.appendChild(btn);
+    }
+    const trail = (7 - ((pad + lastDate) % 7)) % 7;
+    for (let i = 0; i < trail; i++) addEmpty();
+    markCells();
+    ensureMonth(viewYm);
+  };
+
+  const scrollMainTo = (el) => {
+    requestAnimationFrame(() => {
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  };
+
+  const setCalOpen = (open) => {
+    $("la-cal").hidden = !open;
+    $("la-dates").setAttribute("aria-expanded", String(open));
+    if (open) {
+      hoverDay = null;
+      viewYm = range.start.slice(0, 6);
+      paintCal();
+      scrollMainTo($("la-cal"));
+    } else {
+      syncUi();
+      scrollMainTo($("leave-apply"));
+    }
+  };
+
+  const laMsg = (text, ok) => {
+    const el = $("la-msg");
+    el.hidden = !text;
+    el.textContent = text || "";
+    el.classList.toggle("is-ok", !!ok);
+    el.classList.toggle("is-bad", !!text && !ok);
+  };
+
+  setKind("연차");
+  syncUi();
+  $("la-kinds").addEventListener("click", (e) => {
+    const btn = e.target.closest(".la-kind");
+    if (!btn) return;
+    setKind(btn.dataset.kind);
+  });
+  $("la-dates").addEventListener("click", () => setCalOpen($("la-cal").hidden));
+  $("la-cal-grid").addEventListener("pointerleave", () => {
+    if (!hoverDay) return;
+    hoverDay = null;
+    markCells();
+  });
+  $("la-cal-prev").addEventListener("click", () => {
+    viewYm = shiftMonth(viewYm, -1);
+    paintCal();
+  });
+  $("la-cal-next").addEventListener("click", () => {
+    viewYm = shiftMonth(viewYm, 1);
+    paintCal();
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if ($("la-cal").hidden) return;
+    if (e.target.closest("#leave-apply")) return;
+    setCalOpen(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("la-cal").hidden) setCalOpen(false);
+  });
+  $("la-submit").addEventListener("click", async () => {
+    const btn = $("la-submit");
+    btn.disabled = true;
+    laMsg("신청서를 만들고 그룹웨어를 여는 중…", true);
+    const half = kind !== "연차";
+    const res = await ask({
+      type: "applyLeave",
+      kind: range.start === range.end ? kind : "연차",
+      startDt: range.start,
+      endDt: range.end,
+      startTm: half ? getClock("start") : undefined,
+      endTm: half ? getClock("end") : undefined,
+    });
+    btn.disabled = false;
+    if (!res.ok) {
+      laMsg(failureText(res), false);
+      return;
+    }
+    laMsg(res.warning || "그룹웨어 상신 화면을 열었어요.", !res.warning);
+  });
+
+  paintCal();
+}
+
+setupLeaveApply();
 
 renderCredits();
 

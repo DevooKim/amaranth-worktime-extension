@@ -210,6 +210,59 @@
 
         <div id="day-detail" class="day-detail" hidden></div>
 
+        <div id="leave-apply" class="leave-apply">
+          <div class="la-head">
+            <p class="la-title">연차 신청</p>
+          </div>
+          <button id="la-dates" class="la-dates" type="button" aria-expanded="false" aria-controls="la-cal">
+            <span class="la-dates-k">기간</span>
+            <span id="la-dates-v" class="la-dates-v">오늘</span>
+          </button>
+          <div id="la-cal" class="la-cal" hidden>
+            <div class="la-cal-head">
+              <button id="la-cal-prev" class="la-cal-nav" type="button" aria-label="이전 달">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <span id="la-cal-title" class="la-cal-title"></span>
+              <button id="la-cal-next" class="la-cal-nav" type="button" aria-label="다음 달">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            </div>
+            <div class="la-cal-week">
+              <span class="sun">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="sat">토</span>
+            </div>
+            <div id="la-cal-grid" class="la-cal-grid"></div>
+            <p id="la-cal-hint" class="la-cal-hint">시작일과 종료일을 차례로 눌러 주세요</p>
+          </div>
+          <p id="la-kind-fixed" class="la-kind-fixed" hidden>연차</p>
+          <div class="la-kinds" id="la-kinds" role="radiogroup" aria-label="휴가 종류" hidden>
+            <button type="button" class="la-kind is-on" data-kind="연차" aria-pressed="true">연차</button>
+            <button type="button" class="la-kind" data-kind="오전반차" aria-pressed="false">오전반차</button>
+            <button type="button" class="la-kind" data-kind="오후반차" aria-pressed="false">오후반차</button>
+          </div>
+          <div class="la-times" id="la-times" hidden>
+            <div class="la-time">
+              <span>시작</span>
+              <div class="la-time-box">
+                <select id="la-start-h" aria-label="시작 시"></select>
+                <span class="la-colon" aria-hidden="true">:</span>
+                <select id="la-start-m" aria-label="시작 분"></select>
+              </div>
+            </div>
+            <span class="la-tilde" aria-hidden="true">~</span>
+            <div class="la-time">
+              <span>종료</span>
+              <div class="la-time-box">
+                <select id="la-end-h" aria-label="종료 시"></select>
+                <span class="la-colon" aria-hidden="true">:</span>
+                <select id="la-end-m" aria-label="종료 분"></select>
+              </div>
+            </div>
+          </div>
+          <p id="la-msg" class="la-msg" hidden></p>
+          <button id="la-submit" class="btn la-submit" type="button">그룹웨어에서 상신</button>
+        </div>
+
         <div id="leave-balance" class="leave-balance" hidden>
           <div class="lb-head">
             <p class="lb-title">남은 연차</p>
